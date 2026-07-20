@@ -1,6 +1,7 @@
 package dsl
 
 import (
+	"encoding/json"
 	"testing"
 )
 
@@ -240,5 +241,178 @@ func TestHasCycle(t *testing.T) {
 	}
 	if !HasCycle(BuildDeps(cyclic)) {
 		t.Error("a<->b should be cyclic")
+	}
+}
+
+// conditionIR 构造一个带 condition 分支的 IR：start → cond →(命中分支0)→ end。
+func conditionIR() *IR {
+	return &IR{
+		Meta: Meta{Name: "cond-flow"},
+		Nodes: []Node{
+			{ID: "start_0", Kind: KindStart, Outputs: []Port{{Name: "score", Type: ValueTypeNumber}}},
+			{
+				ID:   "cond_0",
+				Kind: KindCondition,
+				Bindings: []Binding{
+					{Port: "score", Mode: BindModeRef, SourceNode: "start_0", SourcePort: "score"},
+				},
+				Branches: []Branch{
+					{Index: 0, Conditions: []Condition{
+						{LeftNode: "start_0", LeftPort: "score", Comparator: "gte", Right: 0.8},
+					}},
+					{Index: 1, Conditions: []Condition{
+						{LeftNode: "start_0", LeftPort: "score", Comparator: "lt", Right: 0.8, RightMode: "literal"},
+					}},
+				},
+			},
+			{ID: "end_0", Kind: KindEnd},
+		},
+		Edges: []Edge{
+			{Source: "start_0", Target: "cond_0"},
+			{Source: "cond_0", Target: "end_0", SourcePort: "0"},
+		},
+	}
+}
+
+// TestRender_ConditionBranchesEmitted 验证 condition 分支被渲染进 nodeParam，
+// 且形态正是 ConditionExecutor 读取的 []any of map[string]any{index,conditions}。
+// 这是风险4的回归防线：此前 branches 被静默丢弃，condition 节点执行期必报
+// "has no branches"。
+func TestRender_ConditionBranchesEmitted(t *testing.T) {
+	r := &Renderer{IDGen: detGen()}
+	d, err := r.Render(conditionIR())
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var cond *DSLNode
+	for i := range d.Nodes {
+		if d.Nodes[i].Data.NodeMeta.NodeType == KindCondition {
+			cond = &d.Nodes[i]
+		}
+	}
+	if cond == nil {
+		t.Fatal("condition node missing")
+	}
+	branches, ok := cond.Data.NodeParam["branches"].([]any)
+	if !ok {
+		t.Fatalf("branches not []any: %T", cond.Data.NodeParam["branches"])
+	}
+	if len(branches) != 2 {
+		t.Fatalf("want 2 branches, got %d", len(branches))
+	}
+	b0, ok := branches[0].(map[string]any)
+	if !ok {
+		t.Fatalf("branch0 not map: %T", branches[0])
+	}
+	conds, ok := b0["conditions"].([]any)
+	if !ok || len(conds) != 1 {
+		t.Fatalf("branch0 conditions = %v", b0["conditions"])
+	}
+	c0 := conds[0].(map[string]any)
+	// left_node 应翻译成 DSL 真实 ID（start::start0），而非可读 ID。
+	if c0["left_node"] != "start::start0" {
+		t.Errorf("left_node = %v, want start::start0", c0["left_node"])
+	}
+	if c0["comparator"] != "gte" || c0["left_port"] != "score" {
+		t.Errorf("condition fields = %+v", c0)
+	}
+}
+
+// TestRoundTrip_ConditionSurvivesJSON 验证 condition 分支能扛过
+// IR→DSL→JSON→DSL→IR 全程无损（存储用 marshal/unmarshal，index 会变 float64）。
+func TestRoundTrip_ConditionSurvivesJSON(t *testing.T) {
+	r := &Renderer{IDGen: detGen()}
+	d, err := r.Render(conditionIR())
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	// 模拟落库读回：marshal + unmarshal，index/right 变 float64。
+	raw, err := json.Marshal(d)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var d2 DSL
+	if err := json.Unmarshal(raw, &d2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	back, err := ToIR(&d2, Meta{Name: "cond-flow"})
+	if err != nil {
+		t.Fatalf("toIR: %v", err)
+	}
+
+	var cond *Node
+	for i := range back.Nodes {
+		if back.Nodes[i].Kind == KindCondition {
+			cond = &back.Nodes[i]
+		}
+	}
+	if cond == nil {
+		t.Fatal("condition node missing after round-trip")
+	}
+	if len(cond.Branches) != 2 {
+		t.Fatalf("want 2 branches after round-trip, got %d", len(cond.Branches))
+	}
+	if cond.Branches[0].Index != 0 || cond.Branches[1].Index != 1 {
+		t.Errorf("branch indices = %d,%d", cond.Branches[0].Index, cond.Branches[1].Index)
+	}
+	c := cond.Branches[0].Conditions[0]
+	// left_node 应翻回可读 ID start_0。
+	if c.LeftNode != "start_0" {
+		t.Errorf("left_node after round-trip = %q, want start_0", c.LeftNode)
+	}
+	if c.Comparator != "gte" || c.LeftPort != "score" {
+		t.Errorf("condition fields lost: %+v", c)
+	}
+	if cond.Branches[1].Conditions[0].RightMode != "literal" {
+		t.Errorf("right_mode lost: %+v", cond.Branches[1].Conditions[0])
+	}
+}
+
+// TestRoundTrip_BatchSurvives 验证 batch 预留字段扛过 render↔ToIR 不被静默丢弃。
+func TestRoundTrip_BatchSurvives(t *testing.T) {
+	ir := &IR{
+		Meta: Meta{Name: "batch-flow"},
+		Nodes: []Node{
+			{ID: "start_0", Kind: KindStart, Outputs: []Port{{Name: "items", Type: ValueTypeArray}}},
+			{
+				ID:    "app_1",
+				Kind:  KindApplication,
+				AppID: "1",
+				Batch: &Batch{Enable: true, SourceNode: "start_0", SourcePort: "items", ItemName: "item", Size: 10},
+			},
+			{ID: "end_0", Kind: KindEnd},
+		},
+		Edges: []Edge{{Source: "start_0", Target: "app_1"}, {Source: "app_1", Target: "end_0"}},
+	}
+	r := &Renderer{IDGen: detGen()}
+	d, err := r.Render(ir)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	raw, _ := json.Marshal(d)
+	var d2 DSL
+	if err := json.Unmarshal(raw, &d2); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	back, err := ToIR(&d2, Meta{})
+	if err != nil {
+		t.Fatalf("toIR: %v", err)
+	}
+	var app *Node
+	for i := range back.Nodes {
+		if back.Nodes[i].Kind == KindApplication {
+			app = &back.Nodes[i]
+		}
+	}
+	if app == nil || app.Batch == nil {
+		t.Fatal("batch lost after round-trip")
+	}
+	if !app.Batch.Enable || app.Batch.SourceNode != "start_0" || app.Batch.SourcePort != "items" {
+		t.Errorf("batch fields = %+v", app.Batch)
+	}
+	if app.Batch.ItemName != "item" || app.Batch.Size != 10 {
+		t.Errorf("batch item/size = %+v", app.Batch)
 	}
 }

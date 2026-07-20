@@ -146,6 +146,18 @@ func (r *Renderer) renderNode(n *Node, idMap map[string]string) (DSLNode, error)
 		}
 	}
 
+	// condition 分支：序列化进 nodeParam，格式对齐 ConditionExecutor 读取
+	// （[]any of map[string]any，index/conditions），使 IR 构造的 condition
+	// 节点渲染出的 DSL 能被引擎执行——此前 branches 被静默丢弃，导致
+	// condition 节点执行期报 "has no branches"。
+	if len(n.Branches) > 0 {
+		nodeParam["branches"] = branchesToParam(n.Branches, idMap)
+	}
+	// batch：预留字段，随节点保留（MVP 无执行器，仅防 render/clone 静默丢弃）。
+	if n.Batch != nil {
+		nodeParam["batch"] = batchToParam(n.Batch, idMap)
+	}
+
 	alias := n.Title
 	if alias == "" {
 		alias = n.Kind
@@ -191,4 +203,60 @@ func hasInput(inputs []InputItem, name string) bool {
 		}
 	}
 	return false
+}
+
+// branchesToParam 把 IR condition 分支序列化成 ConditionExecutor 认识的形态：
+// []any of map[string]any{index, conditions[]}，条件字段用 snake_case
+// （left_node/left_port/comparator/right/right_mode），与 condition.go 读取一致。
+// left_node 经 idMap 翻译成 DSL 真实 ID，保持 DSL 内引用自洽。
+func branchesToParam(branches []Branch, idMap map[string]string) []any {
+	out := make([]any, 0, len(branches))
+	for _, br := range branches {
+		conds := make([]any, 0, len(br.Conditions))
+		for _, c := range br.Conditions {
+			cm := map[string]any{
+				"left_node":  mapNodeID(c.LeftNode, idMap),
+				"left_port":  c.LeftPort,
+				"comparator": c.Comparator,
+				"right":      c.Right,
+			}
+			if c.RightMode != "" {
+				cm["right_mode"] = c.RightMode
+			}
+			conds = append(conds, cm)
+		}
+		out = append(out, map[string]any{
+			"index":      br.Index,
+			"conditions": conds,
+		})
+	}
+	return out
+}
+
+// batchToParam 把 IR Batch 序列化进 nodeParam（MVP 无执行器，仅防丢失）。
+func batchToParam(b *Batch, idMap map[string]string) map[string]any {
+	m := map[string]any{
+		"enable":      b.Enable,
+		"source_node": mapNodeID(b.SourceNode, idMap),
+		"source_port": b.SourcePort,
+	}
+	if b.ItemName != "" {
+		m["item_name"] = b.ItemName
+	}
+	if b.Size != 0 {
+		m["size"] = b.Size
+	}
+	return m
+}
+
+// mapNodeID 用 idMap 翻译节点 ID；不在表中（半成品/悬空引用）时保留原值，
+// 保证 render↔ToIR 对悬空引用是恒等往返。
+func mapNodeID(id string, idMap map[string]string) string {
+	if id == "" {
+		return ""
+	}
+	if mapped, ok := idMap[id]; ok {
+		return mapped
+	}
+	return id
 }

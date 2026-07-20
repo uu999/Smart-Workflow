@@ -72,6 +72,10 @@ func toIRNode(n DSLNode, idMap map[string]string) (Node, error) {
 			node.DatasetID = toStr(v)
 		case kind == KindWorkflow && k == "workflowId":
 			node.WorkflowID = toStr(v)
+		case k == "branches":
+			node.Branches = paramToBranches(v, idMap)
+		case k == "batch":
+			node.Batch = paramToBatch(v, idMap)
 		default:
 			params[k] = v
 		}
@@ -175,4 +179,75 @@ func toStr(v any) string {
 		return s
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+// paramToBranches 把 nodeParam["branches"] 还原成 IR []Branch。
+// 兼容内存态（[]any / int index）与 JSON 反序列化态（[]any / float64 index）。
+// left_node 经 idMap 从 DSL ID 翻回可读 ID，实现 render↔ToIR 无损往返。
+func paramToBranches(v any, idMap map[string]string) []Branch {
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	branches := make([]Branch, 0, len(raw))
+	for _, item := range raw {
+		bm, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		br := Branch{Index: toInt(bm["index"])}
+		if conds, ok := bm["conditions"].([]any); ok {
+			for _, c := range conds {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				br.Conditions = append(br.Conditions, Condition{
+					LeftNode:   mapNodeID(toStr(cm["left_node"]), idMap),
+					LeftPort:   toStr(cm["left_port"]),
+					Comparator: toStr(cm["comparator"]),
+					Right:      cm["right"],
+					RightMode:  toStr(cm["right_mode"]),
+				})
+			}
+		}
+		branches = append(branches, br)
+	}
+	return branches
+}
+
+// paramToBatch 把 nodeParam["batch"] 还原成 IR *Batch。
+func paramToBatch(v any, idMap map[string]string) *Batch {
+	bm, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	b := &Batch{
+		SourceNode: mapNodeID(toStr(bm["source_node"]), idMap),
+		SourcePort: toStr(bm["source_port"]),
+		ItemName:   toStr(bm["item_name"]),
+		Size:       toInt(bm["size"]),
+	}
+	if e, ok := bm["enable"].(bool); ok {
+		b.Enable = e
+	}
+	return b
+}
+
+// toInt 把 JSON 数字（float64）或内存态整型统一转 int。
+func toInt(v any) int {
+	switch n := v.(type) {
+	case int:
+		return n
+	case int32:
+		return int(n)
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	case float32:
+		return int(n)
+	default:
+		return 0
+	}
 }

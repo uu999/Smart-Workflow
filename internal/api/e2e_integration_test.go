@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strconv"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/smart-workflow/smart-workflow/internal/dsl"
 	"github.com/smart-workflow/smart-workflow/internal/engine"
 	"github.com/smart-workflow/smart-workflow/internal/storage/mysql"
+	"github.com/smart-workflow/smart-workflow/internal/storage/mysql/gen"
 )
 
 // 运行方式（需先 make infra-up + migrate-up）：
@@ -169,10 +171,9 @@ func TestM6_E2E_FullChain(t *testing.T) {
 		t.Fatalf("first version = %d, want 1", pubResp.Version)
 	}
 
-	// 5) 触发运行（version=0 → 取已发布版本），异步返回 pending。
+	// 5) 触发运行（省略 version → 取已发布版本），异步返回 pending。
 	_, env = h.do(t, http.MethodPost, "/v1/runs", map[string]any{
 		"workflow_id": wfID,
-		"version":     0,
 		"input":       map[string]any{"query": "hello"},
 	})
 	var runResp struct {
@@ -253,7 +254,32 @@ func TestM6_E2E_FullChain(t *testing.T) {
 		t.Fatalf("status_success assertion should pass: %+v", dbg.Assertions)
 	}
 
-	// 8) 错误码守卫：不存在的 workflow → 404 NOT_FOUND。
+	// 7b) TD-10 run gate：把草稿改成坏图（删掉 start，制造 start_count error），
+	// 以 version=-1（草稿）触发 run，应被前置校验拦下 → 422 VALIDATION_FAILED + issues，
+	// 且不产生新的 pending run（坏图不落库）。
+	badDraft := e2eDSL()
+	badDraft.Nodes = badDraft.Nodes[1:] // 去掉 start::1
+	_, env = h.do(t, http.MethodPut, "/v1/workflows/"+wfID, map[string]any{
+		"name":  "e2e-wf",
+		"draft": badDraft,
+	})
+	if !env.OK {
+		t.Fatalf("update draft to bad graph failed: %+v", env.Err)
+	}
+	draftVer := int32(-1)
+	rec7b, env7b := h.do(t, http.MethodPost, "/v1/runs", map[string]any{
+		"workflow_id": wfID,
+		"version":     draftVer,
+		"input":       map[string]any{"query": "hi"},
+	})
+	if rec7b.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("run on bad draft status = %d, want 422; body ok=%v", rec7b.Code, env7b.OK)
+	}
+	if env7b.OK || env7b.Err == nil || env7b.Err.Code != "VALIDATION_FAILED" {
+		t.Fatalf("expected VALIDATION_FAILED envelope, got %+v", env7b)
+	}
+
+	// 8) 错误码守卫：不存在的 workflow → 404 NOT_FOUND.
 	rec, env := h.do(t, http.MethodGet, "/v1/workflows/does-not-exist", nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("GET missing workflow status = %d, want 404", rec.Code)
@@ -272,6 +298,49 @@ func TestM6_E2E_FullChain(t *testing.T) {
 	}
 }
 
+// TestM6_E2E_FailRunTombstone 验证 FailRunWithError 给 pending run 打 failed 墓碑
+// （硬伤1 兜底的核心保证：满载拒绝 / panic 时 run 不会永久卡 pending/running）。
+func TestM6_E2E_FailRunTombstone(t *testing.T) {
+	st := e2eTestStore(t)
+	defer st.Close()
+	eng := engine.New(st, "")
+	ctx := context.Background()
+
+	suffix := time.Now().UnixNano()
+	runID := "run_tomb_" + itoa(suffix)
+	wfID := "wf_tomb_" + itoa(suffix)
+
+	if _, err := st.Q.CreateWorkflowRun(ctx, gen.CreateWorkflowRunParams{
+		RunID:       runID,
+		WorkflowID:  wfID,
+		Version:     1,
+		Status:      "pending",
+		TriggerType: "test",
+		Input:       json.RawMessage(`{}`),
+	}); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	defer func() { _, _ = st.DB.ExecContext(ctx, "DELETE FROM workflow_run WHERE run_id = ?", runID) }()
+
+	if err := eng.FailRunWithError(ctx, runID, "run rejected: dispatcher at capacity"); err != nil {
+		t.Fatalf("FailRunWithError: %v", err)
+	}
+
+	run, err := st.Q.GetWorkflowRun(ctx, runID)
+	if err != nil {
+		t.Fatalf("get run: %v", err)
+	}
+	if run.Status != "failed" {
+		t.Fatalf("status = %q, want failed", run.Status)
+	}
+	if !run.Error.Valid || run.Error.String == "" {
+		t.Fatal("failed run should carry an error message")
+	}
+	if !run.FinishedAt.Valid {
+		t.Fatal("failed run should have finished_at set")
+	}
+}
+
 func e2eTestStore(t *testing.T) *mysql.Store {
 	t.Helper()
 	dsn := os.Getenv("SWF_TEST_DSN")
@@ -283,6 +352,11 @@ func e2eTestStore(t *testing.T) *mysql.Store {
 		t.Fatalf("open store: %v", err)
 	}
 	return st
+}
+
+// itoa 是本测试文件的轻量 int64→string（避免额外 import 漂移）。
+func itoa(n int64) string {
+	return strconv.FormatInt(n, 10)
 }
 
 // e2eDSL 构造 start→code→end 图；code 节点声明 answer 输出，供 end 绑定与校验通过。

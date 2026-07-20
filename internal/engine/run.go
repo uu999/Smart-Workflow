@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/smart-workflow/smart-workflow/internal/dsl"
 	"github.com/smart-workflow/smart-workflow/internal/engine/builder"
 	"github.com/smart-workflow/smart-workflow/internal/engine/nodes"
@@ -34,6 +36,7 @@ const (
 type Engine struct {
 	store       *mysql.Store
 	registry    *nodes.Registry
+	logger      *zap.Logger
 	Concurrency int
 }
 
@@ -43,8 +46,25 @@ func New(store *mysql.Store, sidecarURL string) *Engine {
 	return &Engine{
 		store:       store,
 		registry:    nodes.NewDefaultRegistry(nodes.Config{SidecarURL: sidecarURL}),
+		logger:      zap.NewNop(),
 		Concurrency: 8,
 	}
+}
+
+// WithLogger 注入结构化日志器（返回自身便于链式调用）。传 nil 时保持 Nop。
+func (e *Engine) WithLogger(l *zap.Logger) *Engine {
+	if l != nil {
+		e.logger = l
+	}
+	return e
+}
+
+// log 返回非空 logger（防御结构体字面量构造时 logger 为 nil）。
+func (e *Engine) log() *zap.Logger {
+	if e.logger == nil {
+		return zap.NewNop()
+	}
+	return e.logger
 }
 
 // Run 执行一个已创建的 workflow_run：
@@ -53,31 +73,53 @@ func (e *Engine) Run(ctx context.Context, runID string) error {
 	if e == nil || e.store == nil {
 		return fmt.Errorf("engine: nil store")
 	}
+	log := e.log().With(zap.String("run_id", runID))
 
 	run, err := e.store.Q.GetWorkflowRun(ctx, runID)
 	if err != nil {
+		log.Error("run stage: load run record failed", zap.Error(err))
 		return fmt.Errorf("engine: get run %s: %w", runID, err)
 	}
+	log.Info("run stage: start",
+		zap.String("workflow_id", run.WorkflowID),
+		zap.Int32("version", run.Version),
+		zap.String("trigger", run.TriggerType),
+	)
 
 	startedAt := time.Now()
 	if err := e.updateRun(ctx, runID, RunStatusRunning, nil, "", startedAt, time.Time{}); err != nil {
+		log.Error("run stage: mark running failed", zap.Error(err))
 		return fmt.Errorf("engine: mark run running: %w", err)
 	}
+	log.Info("run stage: marked running")
 
 	input, err := decodeInput(run.Input)
 	if err != nil {
+		log.Warn("run stage: decode input failed", zap.Error(err))
 		return e.failRun(ctx, runID, startedAt, fmt.Errorf("engine: decode run input: %w", err))
 	}
 
 	workflowDSL, err := e.loadDSL(ctx, run.WorkflowID, run.Version)
 	if err != nil {
+		log.Warn("run stage: load dsl failed", zap.Error(err))
 		return e.failRun(ctx, runID, startedAt, err)
 	}
+	log.Info("run stage: dsl loaded",
+		zap.Bool("is_draft", run.Version == DraftVersion),
+		zap.Int("node_count", len(workflowDSL.Nodes)),
+		zap.Int("edge_count", len(workflowDSL.Edges)),
+	)
 
 	plan, err := builder.Build(workflowDSL)
 	if err != nil {
+		log.Warn("run stage: build plan failed", zap.Error(err))
 		return e.failRun(ctx, runID, startedAt, err)
 	}
+	log.Info("run stage: plan built",
+		zap.Int("plan_nodes", len(plan.Nodes)),
+		zap.Int("end_nodes", len(plan.EndIDs)),
+		zap.Int("concurrency", e.Concurrency),
+	)
 
 	pool := varpool.New()
 	result, runErr := scheduler.Run(ctx, plan, pool, scheduler.Options{
@@ -86,13 +128,42 @@ func (e *Engine) Run(ctx context.Context, runID string) error {
 		Concurrency: e.Concurrency,
 		Registry:    e.registry,
 	})
+	if runErr != nil {
+		log.Warn("run stage: scheduling finished with error",
+			zap.Duration("elapsed", time.Since(startedAt)), zap.Error(runErr))
+	} else {
+		log.Info("run stage: scheduling succeeded",
+			zap.Duration("elapsed", time.Since(startedAt)),
+			zap.Int("executed_nodes", nodeCount(result)),
+		)
+	}
+
 	if err := e.persistFinal(ctx, runID, startedAt, result, runErr); err != nil {
+		log.Error("run stage: persist final failed", zap.Error(err))
 		if runErr != nil {
 			return fmt.Errorf("%w; additionally failed to persist run result: %v", runErr, err)
 		}
 		return err
 	}
+	log.Info("run stage: final persisted",
+		zap.String("final_status", finalStatus(runErr)))
 	return runErr
+}
+
+// nodeCount 安全统计调度结果的节点数（result 可能为 nil）。
+func nodeCount(r *scheduler.Result) int {
+	if r == nil {
+		return 0
+	}
+	return len(r.Nodes)
+}
+
+// finalStatus 把 runErr 归一为落库的终态字符串（供日志展示）。
+func finalStatus(runErr error) string {
+	if runErr != nil {
+		return RunStatusFailed
+	}
+	return RunStatusSucceeded
 }
 
 func (e *Engine) loadDSL(ctx context.Context, workflowID string, version int32) (*dsl.DSL, error) {
@@ -188,6 +259,25 @@ func (e *Engine) updateRun(ctx context.Context, runID, status string, output any
 		RunID:      runID,
 	})
 	return err
+}
+
+// FailRunWithError 给一个已创建的 run 打上 failed 墓碑，用于「引擎从未真正跑起来」
+// 的边界（后台执行 panic、调度器满载拒绝等）——保证 run 不会永久卡在
+// pending/running。保留已有 started_at（读不到则不设），补 finished_at=now。
+//
+// 与 Run 内部的 persistFinal/failRun 互补：那两条覆盖「跑起来后失败」，
+// 本方法覆盖「压根没进 Run 主体或中途崩了」的兜底。
+func (e *Engine) FailRunWithError(ctx context.Context, runID, errMsg string) error {
+	if e == nil || e.store == nil {
+		return fmt.Errorf("engine: nil store")
+	}
+	e.log().Warn("run stage: force-fail (tombstone)",
+		zap.String("run_id", runID), zap.String("reason", errMsg))
+	var startedAt time.Time
+	if run, err := e.store.Q.GetWorkflowRun(ctx, runID); err == nil && run.StartedAt.Valid {
+		startedAt = run.StartedAt.Time
+	}
+	return e.updateRun(ctx, runID, RunStatusFailed, map[string]any{}, errMsg, startedAt, time.Now())
 }
 
 func decodeInput(raw json.RawMessage) (map[string]any, error) {

@@ -21,6 +21,9 @@ type Deps struct {
 	Logger *zap.Logger
 	Store  *mysql.Store
 	Engine *engine.Engine
+	// Dispatcher 后台运行调度器（硬伤1）。为空时按默认并发构造；
+	// 调用方（main）通常自建并持有引用以便优雅退出时 Shutdown。
+	Dispatcher *RunDispatcher
 }
 
 // handlers 聚合各资源 service，供 handler 方法使用。
@@ -28,6 +31,7 @@ type handlers struct {
 	cfg       *config.Config
 	logger    *zap.Logger
 	engine    *engine.Engine
+	runner    *RunDispatcher
 	projects  *service.ProjectService
 	apps      *service.ApplicationService
 	workflows *service.WorkflowService
@@ -53,10 +57,15 @@ func NewRouter(d Deps) *gin.Engine {
 
 	// M6：仅在 store 就绪时挂载资源路由（测试可只传 Cfg+Logger 复用探针）。
 	if d.Store != nil {
+		runner := d.Dispatcher
+		if runner == nil {
+			runner = NewRunDispatcher(d.Engine, d.Logger, 0)
+		}
 		h := &handlers{
 			cfg:       d.Cfg,
 			logger:    d.Logger,
 			engine:    d.Engine,
+			runner:    runner,
 			projects:  service.NewProjectService(d.Store),
 			apps:      service.NewApplicationService(d.Store),
 			workflows: service.NewWorkflowService(d.Store),
@@ -108,6 +117,10 @@ func (h *handlers) register(v1 *gin.RouterGroup) {
 		runs.GET("", h.listRuns)
 		runs.GET("/:id", h.getRun)
 	}
+
+	// 无状态单节点调试（风险1）：吃渲染后的 DSL 节点，不需 workflowID，
+	// 支撑 CLI "本地 validate/preview → node-debug → upload" 闭环。
+	v1.POST("/node-debug", h.debugNode)
 }
 
 // healthz 是存活探针。

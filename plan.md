@@ -191,18 +191,44 @@ M5 反思后补强（已落地）：
     与 404/400 错误码；Python 侧补 TD-6 脱敏行为断言（message 不含绝对路径、
     完整 traceback 留 logs）
   顺带清 TD-1（Python 版本声明对齐 3.9+）、TD-6（traceback 脱敏）、TD-7（真实装配）
+反思后补强（已落地）：
+  ① 后台 run 加固（TD-8）：裸 goroutine → api.RunDispatcher，
+     panic 兜底落 failed + semaphore 限并发 + 优雅退出 drain，满载回 503
+  ② version 语义消歧（TD-9）：createRunReq.Version 改 *int32，
+     省略=最新发布 / -1=草稿 / N>0=指定 / 显式 0 或 < -1 报 400
+  其余反思项记入技术债 TD-10（run 前 validation gate）、
+  TD-11（handler 强耦合）、TD-12（列表/大对象/断言契约债），随 M7/M8 再清
 ```
 
-### M7 · CLI（M-CLI）★卖点
+### M7 · CLI（M-CLI）★卖点 ✅ 已完成
 ```text
 交付：
-  swf init/add-node/add-edge/bind/remove-*（增量构建）
+  swf init/add-node/add-edge/bind/remove-node/remove-edge/remove-binding（增量构建）
   swf validate/preview/node-debug/run（验证评测）
-  swf upload（发布，默认新副本）
+  swf upload（发布，默认新副本；--update-id 覆盖需 --confirm）
   session 目录（ir.json/meta.json/dsl.json/app_cache）
   统一 JSON envelope + 结构化错误（code/message/hint）
 验收：
   Agent 仅靠 CLI 完成：建图→bind→validate→node-debug→upload→run
+落地说明：
+  internal/cli：session（IR/DSL 两层会话，原子写落盘）+ output（envelope）
+    + client（调服务端，透传 code/message/details）+ 三组 cobra 命令
+  作用面决策（风险1）：validate/preview 在 CLI 进程内跑（复用 dsl.Renderer +
+    validator，零成本离线），node-debug/run/upload 才碰服务端——"upload 前修到
+    0 error"闭环得以成立，不必先灌半成品草稿进库
+  cmd/swf/main.go：cobra 根命令，结构化错误已进 envelope 后据 error 设非零退出码
+  测试：session 往返/端口解析单测、全离线建图闭环（init→…→validate→preview）、
+    结构化错误、node-debug/run/upload 转发（httptest mock server）；-race 通过
+M7 反思后先行去风险（已落地，见下）：
+  ① 风险4：render/clone 从不序列化 condition.branches / batch → rendered
+     condition 执行期必报 "has no branches"。已修：renderNode 按 ConditionExecutor
+     读取格式（[]any{index,conditions}，left_node 经 idMap 译真实 ID）序列化
+     branches+batch；ToIR 反向还原；补 IR→Render→Build→Run 端到端回归防线
+     （证明 rendered condition 真能驱动分支剪枝）+ JSON 往返无损测试
+  ② 风险2：application/llm 无执行器 → 决策 M7 验收样例限 http+code，
+     application/llm 真实执行随 M8 app-schema/catalog 落（避免造假"通过"信号）
+  ③ TD-10：run 前置 validation gate（见 TD-10 已修复条目）
+  ④ 风险1：新增无状态 POST /v1/node-debug（吃渲染后 DSL 节点，不需 workflowID）
 ```
 
 ### M8 · 能力发现（M-CATALOG）
@@ -366,6 +392,56 @@ TD-7  engine 真实装配链路未端到端验证 ✅ 已修复（M6）
   处理：main.go 已接 mysql.Open + engine.New(store, sidecarURL)；
         补 E2E integration 冒烟覆盖 create→validate→run→node-debug
   目标：M6（已完成）
+
+TD-8  后台 run goroutine 三重缺陷 ✅ 已修复（M6 反思）
+  现状（曾）：createRun 内裸 go func 调 engine.Run，且用 context.Background()——
+        (1) 无 panic 兜底：gin.Recovery 护不到自起 goroutine，run panic 直接崩进程；
+        (2) 逃逸优雅退出：srv.Shutdown 不等在途 run，重启丢任务、留僵尸 running；
+        (3) 无并发上限：每请求一条 goroutine + sidecar 连接，批量易 OOM/打爆 sidecar
+  处理：新增 api.RunDispatcher——semaphore 限并发（默认 16）+ 每 goroutine recover
+        落 failed（engine.FailRunWithError 打墓碑）+ 可取消 baseCtx + WaitGroup，
+        main.go 优雅退出时 dispatcher.Shutdown(ctx) drain 在途 run；
+        满载/关停时 Submit 返 false，createRun 改判 failed 并回 503 RUN_REJECTED
+  说明：这是「M9 换 asynq 前」的进程内兜底，HTTP 契约不变；
+        M9 只需把 Submit 换入队、Shutdown 换停消费者
+  目标：M6（已完成）
+
+TD-9  run version=0 语义重载 ✅ 已修复（M6 反思）
+  现状（曾）：CreateRun 的 version int32 把 0/缺省/-1/正数塞四义，
+        JSON 缺省零值=0，"忘传 version" 被静默当成"跑已发布"，Agent 拿误导结果
+  处理：createRunReq.Version 改 *int32；resolveVersion 用指针消歧——
+        nil(省略)=最新发布 / -1=草稿 / N>0=指定 / 显式 0 或 < -1 → ErrInvalidVersion
+        （400 INVALID_VERSION），不再静默兜底
+  目标：M6（已完成）
+
+TD-10 run 前无 validation gate ✅ 已修复（M7）
+  现状（曾）：POST /runs 不调 validate，坏图（缺 start/环/坏 ref）一路跑进 builder/scheduler，
+        落 failed 但错误是裸字符串，不是 validate 的结构化 issues
+  影响：Agent/CLI 期望 run 失败能拿到可定位的 issue 列表；PaiFlow 心智是"validate 过才 run"
+  处理：RunService.CreateRun 在 resolveVersion 后、落 pending 前插 validateForRun gate：
+        加载目标版本（草稿/已发布）DSL → validateDSL，HasError 则返回 *ValidationError
+        （携全部 issues），不落库、不进 builder；helpers.failFromErr 映射为
+        422 VALIDATION_FAILED + details.issues。CLI run 命令原样透传，Agent 据此修复
+  目标：M7（已完成）
+
+TD-11 API handler 与具体 service 强耦合
+  现状：handler 持 *service.XxxService 具体类型而非接口，
+        除 helpers 与 E2E 外，handler 业务分支无法脱库单测
+  影响：一旦给 handler 加鉴权/限流/参数转换（M10），可测面变窄
+  处理：抽 service 接口，handler 依赖接口，支持 mock 单测
+  目标：M10 加固（或 handler 逻辑变重时）
+
+TD-12 列表/大对象 API 契约债（趁未被 CLI 锁死前定）
+  现状：(1) listRuns/listWorkflows/listApplications 只回 {items:[]}，无 total/cursor，
+            客户端只能靠 len==limit 猜下一页；
+        (2) GetRun 一次性全量返回所有 node_run（ListNodeRuns 无 limit）+ 每个 node
+            的 input/output 全 JSON，大图/大 output 时响应体膨胀；
+        (3) node-debug assertions 硬编码 3 条，Agent 无法自定义断言表达式
+  影响：契约一旦被 M7 CLI 锁定，再改分页/裁剪/断言 DSL 都是 breaking change
+  处理：列表加 total 或 cursor；GetRun 的 node_run 分页 + 大字段可选裁剪；
+        assertions 升级为可配置表达式（真 eval 卖点）
+  目标：M8（能力发现/契约定型期）；断言 DSL 可延至 eval 场景
+
 ```
 
 ---

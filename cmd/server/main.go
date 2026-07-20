@@ -38,13 +38,17 @@ func main() {
 	}
 	defer func() { _ = store.Close() }()
 
-	eng := engine.New(store, cfg.Sidecar.BaseURL)
+	eng := engine.New(store, cfg.Sidecar.BaseURL).WithLogger(logger)
+
+	// 后台运行调度器（硬伤1）：panic 兜底 + 并发上限 + 优雅退出 drain。
+	dispatcher := api.NewRunDispatcher(eng, logger, 0)
 
 	router := api.NewRouter(api.Deps{
-		Cfg:    cfg,
-		Logger: logger,
-		Store:  store,
-		Engine: eng,
+		Cfg:        cfg,
+		Logger:     logger,
+		Store:      store,
+		Engine:     eng,
+		Dispatcher: dispatcher,
 	})
 
 	srv := &http.Server{
@@ -70,6 +74,10 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		logger.Error("graceful shutdown failed", zap.Error(err))
+	}
+	// HTTP 已停收新请求，再 drain 在途后台 run（取消其 ctx 并等收尾）。
+	if err := dispatcher.Shutdown(ctx); err != nil {
+		logger.Warn("run dispatcher drain timed out", zap.Error(err))
 	}
 	logger.Info("server stopped")
 }

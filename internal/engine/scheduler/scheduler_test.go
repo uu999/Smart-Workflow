@@ -84,6 +84,70 @@ func TestRun_ConditionBranchSkipsUnmatchedBranch(t *testing.T) {
 	assertStatus(t, result, "end::fail", nodes.StatusSkipped)
 }
 
+// TestRun_RenderedConditionExecutes 是风险4的端到端回归防线：从 IR 经 Render
+// 得到 DSL，再 Build+Run，验证渲染出的 condition 分支真能驱动剪枝（此前 render
+// 丢弃 branches，rendered condition 执行期必报 "has no branches"）。
+// 与上面手搓 nodeParam 的用例互补——那个测调度，这个测 render→execute 的接缝。
+func TestRun_RenderedConditionExecutes(t *testing.T) {
+	ir := &dsl.IR{
+		Meta: dsl.Meta{Name: "cond"},
+		Nodes: []dsl.Node{
+			{ID: "start_0", Kind: dsl.KindStart, Outputs: []dsl.Port{{Name: "score", Type: dsl.ValueTypeNumber}}},
+			{
+				ID:   "cond_0",
+				Kind: dsl.KindCondition,
+				Bindings: []dsl.Binding{
+					{Port: "score", Mode: dsl.BindModeRef, SourceNode: "start_0", SourcePort: "score"},
+				},
+				Branches: []dsl.Branch{
+					{Index: 0, Conditions: []dsl.Condition{{LeftPort: "score", Comparator: "gte", Right: 0.8}}},
+					{Index: 1, Conditions: []dsl.Condition{{LeftPort: "score", Comparator: "lt", Right: 0.8}}},
+				},
+			},
+			{ID: "end_pass", Kind: dsl.KindEnd, Title: "pass", Params: map[string]any{"template": "pass"},
+				Inputs:   []dsl.Port{{Name: "score", Type: dsl.ValueTypeNumber}},
+				Bindings: []dsl.Binding{{Port: "score", Mode: dsl.BindModeRef, SourceNode: "start_0", SourcePort: "score"}}},
+			{ID: "end_fail", Kind: dsl.KindEnd, Title: "fail", Params: map[string]any{"template": "fail"},
+				Inputs:   []dsl.Port{{Name: "score", Type: dsl.ValueTypeNumber}},
+				Bindings: []dsl.Binding{{Port: "score", Mode: dsl.BindModeRef, SourceNode: "start_0", SourcePort: "score"}}},
+		},
+		Edges: []dsl.Edge{
+			{Source: "start_0", Target: "cond_0"},
+			{Source: "cond_0", Target: "end_pass", SourcePort: "0"},
+			{Source: "cond_0", Target: "end_fail", SourcePort: "1"},
+		},
+	}
+
+	d, err := dsl.NewRenderer().Render(ir)
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+
+	// 从渲染出的 DSL 里取真实 ID（title 唯一标识两个 end 节点），供断言用。
+	var condID, endPassID, endFailID string
+	for _, n := range d.Nodes {
+		switch n.Data.NodeMeta.NodeType {
+		case dsl.KindCondition:
+			condID = n.ID
+		case dsl.KindEnd:
+			switch n.Data.NodeMeta.AliasName {
+			case "pass":
+				endPassID = n.ID
+			case "fail":
+				endFailID = n.ID
+			}
+		}
+	}
+	if condID == "" || endPassID == "" || endFailID == "" {
+		t.Fatalf("missing rendered ids: cond=%q pass=%q fail=%q", condID, endPassID, endFailID)
+	}
+
+	result := runPlan(t, d, map[string]any{"score": 0.9})
+	assertStatus(t, result, condID, nodes.StatusSucceeded)
+	assertStatus(t, result, endPassID, nodes.StatusSucceeded)
+	assertStatus(t, result, endFailID, nodes.StatusSkipped)
+}
+
 func TestRun_StartCodeToEnd(t *testing.T) {
 	// mock sidecar：把 inputs.n 翻倍后 sink 回 doubled。
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -13,11 +13,21 @@ import (
 
 // failFromErr 把 service 层错误映射为统一 HTTP 状态 + 错误码 envelope。
 func failFromErr(c *gin.Context, err error) {
+	// TD-10 run gate：校验失败带结构化 issues，422 + details.issues 供 Agent 自动修复。
+	var verr *service.ValidationError
+	if errors.As(err, &verr) {
+		httpx.Fail(c, http.StatusUnprocessableEntity, "VALIDATION_FAILED", verr.Error(), gin.H{
+			"issues": verr.Issues,
+		})
+		return
+	}
 	switch {
 	case errors.Is(err, service.ErrNotFound), errors.Is(err, service.ErrNodeNotFound):
 		httpx.Fail(c, http.StatusNotFound, "NOT_FOUND", err.Error(), nil)
 	case errors.Is(err, service.ErrVersionLock):
 		httpx.Fail(c, http.StatusConflict, "VERSION_CONFLICT", err.Error(), nil)
+	case errors.Is(err, service.ErrInvalidVersion):
+		httpx.Fail(c, http.StatusBadRequest, "INVALID_VERSION", err.Error(), nil)
 	case errors.Is(err, service.ErrInvalidJSON):
 		httpx.Fail(c, http.StatusBadRequest, "INVALID_JSON", err.Error(), nil)
 	default:
