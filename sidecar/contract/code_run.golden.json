@@ -1,0 +1,16 @@
+{
+  "success_response": {
+    "ok": true,
+    "data": {
+      "outputs": { "answer": 42 },
+      "logs": "debug line\n"
+    }
+  },
+  "error_response": {
+    "ok": false,
+    "error": {
+      "code": "RUNTIME_ERROR",
+      "message": "ValueError: boom"
+    }
+  }
+}

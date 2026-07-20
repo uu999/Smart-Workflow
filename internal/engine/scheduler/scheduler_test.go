@@ -1,0 +1,190 @@
+package scheduler
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/smart-workflow/smart-workflow/internal/dsl"
+	"github.com/smart-workflow/smart-workflow/internal/engine/builder"
+	"github.com/smart-workflow/smart-workflow/internal/engine/nodes"
+	"github.com/smart-workflow/smart-workflow/internal/engine/varpool"
+)
+
+func TestRun_StartHTTPToEnd(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"message": r.URL.Query().Get("q"),
+		})
+	}))
+	defer srv.Close()
+
+	d := &dsl.DSL{
+		Nodes: []dsl.DSLNode{
+			node("start::1", dsl.KindStart, nil, nil),
+			node("http::1", "http", map[string]any{
+				"method": "GET",
+				"url":    srv.URL + "/echo?q={{q}}",
+			}, []dsl.InputItem{refInput("q", "start::1", "query")}),
+			node("end::1", dsl.KindEnd, map[string]any{
+				"template": "{{answer}}",
+			}, []dsl.InputItem{refInput("answer", "http::1", "json.message")}),
+		},
+		Edges: []dsl.DSLEdge{
+			{SourceNodeID: "start::1", TargetNodeID: "http::1"},
+			{SourceNodeID: "http::1", TargetNodeID: "end::1"},
+		},
+	}
+
+	result := runPlan(t, d, map[string]any{"query": "hello"})
+	if got := result.Outputs["output"]; got != "hello" {
+		t.Fatalf("end output = %v, want hello", got)
+	}
+	assertStatus(t, result, "start::1", nodes.StatusSucceeded)
+	assertStatus(t, result, "http::1", nodes.StatusSucceeded)
+	assertStatus(t, result, "end::1", nodes.StatusSucceeded)
+}
+
+func TestRun_ConditionBranchSkipsUnmatchedBranch(t *testing.T) {
+	d := &dsl.DSL{
+		Nodes: []dsl.DSLNode{
+			node("start::1", dsl.KindStart, nil, nil),
+			node("condition::1", dsl.KindCondition, map[string]any{
+				"branches": []any{
+					map[string]any{"index": 0, "conditions": []any{
+						map[string]any{"left_port": "score", "comparator": "gte", "right": 0.8},
+					}},
+					map[string]any{"index": 1, "conditions": []any{
+						map[string]any{"left_port": "score", "comparator": "lt", "right": 0.8},
+					}},
+				},
+			}, []dsl.InputItem{refInput("score", "start::1", "score")}),
+			node("end::pass", dsl.KindEnd, map[string]any{
+				"template": "pass {{score}}",
+			}, []dsl.InputItem{refInput("score", "start::1", "score")}),
+			node("end::fail", dsl.KindEnd, map[string]any{
+				"template": "fail {{score}}",
+			}, []dsl.InputItem{refInput("score", "start::1", "score")}),
+		},
+		Edges: []dsl.DSLEdge{
+			{SourceNodeID: "start::1", TargetNodeID: "condition::1"},
+			{SourceNodeID: "condition::1", TargetNodeID: "end::pass", SourceHandle: "0"},
+			{SourceNodeID: "condition::1", TargetNodeID: "end::fail", SourceHandle: "1"},
+		},
+	}
+
+	result := runPlan(t, d, map[string]any{"score": 0.9})
+	if got := result.Outputs["output"]; got != "pass 0.9" {
+		t.Fatalf("end output = %v, want pass 0.9", got)
+	}
+	assertStatus(t, result, "condition::1", nodes.StatusSucceeded)
+	assertStatus(t, result, "end::pass", nodes.StatusSucceeded)
+	assertStatus(t, result, "end::fail", nodes.StatusSkipped)
+}
+
+func TestRun_StartCodeToEnd(t *testing.T) {
+	// mock sidecar：把 inputs.n 翻倍后 sink 回 doubled。
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Inputs map[string]any `json:"inputs"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		n, _ := req.Inputs["n"].(float64)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"ok":   true,
+			"data": map[string]any{"outputs": map[string]any{"doubled": n * 2}, "logs": ""},
+		})
+	}))
+	defer srv.Close()
+
+	// 用注入 SidecarURL 的 code 执行器构造注册表（避免打真实 sidecar，也不碰全局状态）。
+	reg := nodes.NewDefaultRegistry(nodes.Config{SidecarURL: srv.URL})
+
+	d := &dsl.DSL{
+		Nodes: []dsl.DSLNode{
+			node("start::1", dsl.KindStart, nil, nil),
+			node("code::1", dsl.KindCode, map[string]any{
+				"code": "sink({'doubled': inputs['n']*2})",
+			}, []dsl.InputItem{refInput("n", "start::1", "n")}),
+			node("end::1", dsl.KindEnd, map[string]any{
+				"template": "result={{doubled}}",
+			}, []dsl.InputItem{refInput("doubled", "code::1", "doubled")}),
+		},
+		Edges: []dsl.DSLEdge{
+			{SourceNodeID: "start::1", TargetNodeID: "code::1"},
+			{SourceNodeID: "code::1", TargetNodeID: "end::1"},
+		},
+	}
+
+	result := runPlanWithRegistry(t, d, map[string]any{"n": 21.0}, reg)
+	if got := result.Outputs["output"]; got != "result=42" {
+		t.Fatalf("end output = %v, want result=42", got)
+	}
+	assertStatus(t, result, "code::1", nodes.StatusSucceeded)
+}
+
+func runPlan(t *testing.T, d *dsl.DSL, input map[string]any) *Result {
+	t.Helper()
+	return runPlanWithRegistry(t, d, input, nodes.NewDefaultRegistry(nodes.Config{}))
+}
+
+func runPlanWithRegistry(t *testing.T, d *dsl.DSL, input map[string]any, reg *nodes.Registry) *Result {
+	t.Helper()
+	plan, err := builder.Build(d)
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	result, err := Run(context.Background(), plan, varpool.New(), Options{
+		RunID:       "run_test",
+		Input:       input,
+		Concurrency: 4,
+		Registry:    reg,
+	})
+	if err != nil {
+		t.Fatalf("run plan: %v", err)
+	}
+	return result
+}
+
+func node(id, typ string, param map[string]any, inputs []dsl.InputItem) dsl.DSLNode {
+	if param == nil {
+		param = map[string]any{}
+	}
+	return dsl.DSLNode{
+		ID: id,
+		Data: dsl.NodeData{
+			NodeMeta:    dsl.NodeMeta{NodeType: typ, AliasName: typ},
+			NodeParam:   param,
+			Inputs:      inputs,
+			RetryConfig: dsl.DefaultRetryConfig(),
+		},
+	}
+}
+
+func refInput(name, nodeID, port string) dsl.InputItem {
+	return dsl.InputItem{
+		ID:   "in-" + name,
+		Name: name,
+		Schema: dsl.InputSchema{
+			Value: dsl.Value{
+				Type:    dsl.DSLValueRef,
+				Content: dsl.RefContent{NodeID: nodeID, Name: port},
+			},
+		},
+	}
+}
+
+func assertStatus(t *testing.T, result *Result, nodeID, want string) {
+	t.Helper()
+	for _, n := range result.Nodes {
+		if n.NodeID == nodeID {
+			if n.Status != want {
+				t.Fatalf("%s status = %s, want %s", nodeID, n.Status, want)
+			}
+			return
+		}
+	}
+	t.Fatalf("node %s not found in result", nodeID)
+}
