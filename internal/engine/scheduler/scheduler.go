@@ -10,14 +10,16 @@ import (
 	"github.com/smart-workflow/smart-workflow/internal/engine/builder"
 	"github.com/smart-workflow/smart-workflow/internal/engine/nodes"
 	"github.com/smart-workflow/smart-workflow/internal/engine/varpool"
+	"github.com/smart-workflow/smart-workflow/internal/runevent"
 )
 
 // Options 配置一次调度执行。
 type Options struct {
 	RunID       string
-	Input       map[string]any  // 注入 start 节点的运行入参
-	Concurrency int             // 并发上限，<=0 时取 8
-	Registry    *nodes.Registry // 节点执行器注册表（改造①②：由调用方注入，不再用包级全局）
+	Input       map[string]any    // 注入 start 节点的运行入参
+	Concurrency int               // 并发上限，<=0 时取 8
+	Registry    *nodes.Registry   // 节点执行器注册表（改造①②：由调用方注入，不再用包级全局）
+	Emitter     runevent.Emitter  // M9-b：节点事件发射器，nil=不发（零开销）
 }
 
 // NodeExecInfo 是单节点执行记录，供 engine.Run 落 node_run。
@@ -60,7 +62,11 @@ func Run(ctx context.Context, plan *builder.Plan, pool *varpool.VariablePool, op
 		runID:       opts.RunID,
 		concurrency: opts.Concurrency,
 		cancel:      cancel,
+		emitter:     opts.Emitter,
 		states:      make(map[string]*nodeState, len(plan.Nodes)),
+	}
+	if c.emitter == nil {
+		c.emitter = runevent.NopEmitter{}
 	}
 	for id := range plan.Nodes {
 		c.states[id] = &nodeState{
@@ -118,10 +124,29 @@ type coord struct {
 	runID       string
 	concurrency int
 	cancel      context.CancelFunc
+	emitter     runevent.Emitter
+	seq         int64 // 单调事件序号，仅在单线程 loop 内自增，无需锁
 
 	states   map[string]*nodeState
 	inFlight int
 	abortErr error
+}
+
+// emit 在单线程 loop 内发一条事件，分配单调 seq（保证有序）。
+func (c *coord) emit(phase, nodeID, nodeType, status, errMsg string, out map[string]any, costMs int64) {
+	c.seq++
+	c.emitter.Emit(runevent.RunEvent{
+		RunID:    c.runID,
+		Seq:      c.seq,
+		Phase:    phase,
+		NodeID:   nodeID,
+		NodeType: nodeType,
+		Status:   status,
+		Output:   out,
+		Error:    errMsg,
+		CostMs:   costMs,
+		TS:       runevent.NowMillis(),
+	})
 }
 
 // loop 是单线程协调器：拥有全部 states/ready/计数，workers 仅回传 event。
@@ -142,6 +167,8 @@ func (c *coord) loop(ctx context.Context) error {
 			id := ready[0]
 			ready = ready[1:]
 			c.inFlight++
+			// node_start：真正派发执行前发（单线程内，seq 有序）。
+			c.emit(runevent.PhaseNodeStart, id, c.nodeType(id), nodes.StatusRunning, "", nil, 0)
 			go c.execNode(ctx, id, done)
 		}
 		// 无在途：正常跑完（ready 必空），或 abort 后已排空。
@@ -162,6 +189,17 @@ func (c *coord) loop(ctx context.Context) error {
 		st.startedAt = e.startedAt
 		st.finishedAt = e.finishedAt
 
+		// node_end：节点终态事件（succeeded/failed）。
+		var out map[string]any
+		if e.result != nil {
+			out = e.result.Outputs
+		}
+		errMsg := ""
+		if e.err != nil {
+			errMsg = e.err.Error()
+		}
+		c.emit(runevent.PhaseNodeEnd, e.id, c.nodeType(e.id), e.status, errMsg, out, e.cost.Milliseconds())
+
 		if e.status == nodes.StatusFailed {
 			if c.abortErr == nil {
 				c.abortErr = fmt.Errorf("node %s failed: %w", e.id, e.err)
@@ -174,6 +212,11 @@ func (c *coord) loop(ctx context.Context) error {
 		}
 	}
 	return c.abortErr
+}
+
+// nodeType 返回节点类型（发事件用）。
+func (c *coord) nodeType(id string) string {
+	return c.plan.Nodes[id].Data.NodeMeta.NodeType
 }
 
 // propagate 结算已终态节点的出边，级联跳过全死入边的下游，返回新就绪运行的节点。

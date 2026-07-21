@@ -11,7 +11,71 @@ import (
 	"github.com/smart-workflow/smart-workflow/internal/engine/builder"
 	"github.com/smart-workflow/smart-workflow/internal/engine/nodes"
 	"github.com/smart-workflow/smart-workflow/internal/engine/varpool"
+	"github.com/smart-workflow/smart-workflow/internal/runevent"
 )
+
+// captureEmitter 收集调度过程中发出的事件（单线程 loop 内调用，无需锁）。
+type captureEmitter struct {
+	events []runevent.RunEvent
+}
+
+func (c *captureEmitter) Emit(e runevent.RunEvent) { c.events = append(c.events, e) }
+
+// TestRun_EmitsNodeEvents 验证调度发 node_start/node_end，且 seq 单调、
+// node_start 先于对应 node_end（M9-b 事件产出）。
+func TestRun_EmitsNodeEvents(t *testing.T) {
+	d := &dsl.DSL{
+		Nodes: []dsl.DSLNode{
+			node("start::1", dsl.KindStart, nil, nil),
+			node("end::1", dsl.KindEnd, map[string]any{"template": "{{q}}"},
+				[]dsl.InputItem{refInput("q", "start::1", "query")}),
+		},
+		Edges: []dsl.DSLEdge{{SourceNodeID: "start::1", TargetNodeID: "end::1"}},
+	}
+	plan, err := builder.Build(d)
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	cap := &captureEmitter{}
+	_, err = Run(context.Background(), plan, varpool.New(), Options{
+		RunID:       "run_evt",
+		Input:       map[string]any{"query": "hi"},
+		Concurrency: 4,
+		Registry:    nodes.NewDefaultRegistry(nodes.Config{}),
+		Emitter:     cap,
+	})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// seq 单调递增。
+	for i := 1; i < len(cap.events); i++ {
+		if cap.events[i].Seq <= cap.events[i-1].Seq {
+			t.Fatalf("seq not monotonic at %d: %+v", i, cap.events)
+		}
+	}
+	// 每个节点应有 node_start 与 node_end；start 在 end 之前。
+	startSeq := map[string]int64{}
+	endSeq := map[string]int64{}
+	for _, e := range cap.events {
+		switch e.Phase {
+		case runevent.PhaseNodeStart:
+			startSeq[e.NodeID] = e.Seq
+		case runevent.PhaseNodeEnd:
+			endSeq[e.NodeID] = e.Seq
+		}
+	}
+	for _, id := range []string{"start::1", "end::1"} {
+		s, okS := startSeq[id]
+		en, okE := endSeq[id]
+		if !okS || !okE {
+			t.Fatalf("node %s missing start/end event: start=%v end=%v", id, okS, okE)
+		}
+		if s >= en {
+			t.Errorf("node %s: start seq %d should precede end seq %d", id, s, en)
+		}
+	}
+}
 
 func TestRun_StartHTTPToEnd(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

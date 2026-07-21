@@ -127,15 +127,15 @@ func newNodeDebugCmd(a *appCtx) *cobra.Command {
 	return cmd
 }
 
-// newRunCmd: swf run --workflow-id --input [--version n] [--wait]
-// 转发服务端 POST /v1/runs（异步），--wait 时轮询到终态。
+// newRunCmd: swf run --workflow-id --input [--version n] [--wait|--stream]
+// 转发服务端 POST /v1/runs（异步）；--wait 轮询到终态，--stream 订阅 SSE 实时看每步。
 func newRunCmd(a *appCtx) *cobra.Command {
 	var workflowID, inputJSON string
 	var version int
-	var versionSet, wait bool
+	var versionSet, wait, stream bool
 	cmd := &cobra.Command{
 		Use:   "run",
-		Short: "整图端到端运行（服务端异步，--wait 轮询终态）",
+		Short: "整图端到端运行（服务端异步；--wait 轮询终态 / --stream 实时事件流）",
 		RunE: func(c *cobra.Command, _ []string) error {
 			if workflowID == "" {
 				return a.emitErr(newErr("BAD_REQUEST", "--workflow-id is required", "先 swf upload 拿到 workflow_id"))
@@ -161,6 +161,13 @@ func newRunCmd(a *appCtx) *cobra.Command {
 			if rerr := a.client().doJSON("POST", "/v1/runs", body, &runResp); rerr != nil {
 				return a.emitErr(rerr)
 			}
+			// --stream：订阅 SSE 实时打印每步（不可用时内部自动回退轮询）。
+			if stream {
+				if serr := a.streamRun(runResp.RunID); serr != nil {
+					return a.emitErr(serr)
+				}
+				return nil
+			}
 			if !wait {
 				return a.emitOK(runResp)
 			}
@@ -175,6 +182,7 @@ func newRunCmd(a *appCtx) *cobra.Command {
 	cmd.Flags().StringVar(&inputJSON, "input", "", `运行入参 JSON，如 '{"query":"hi"}'`)
 	cmd.Flags().IntVar(&version, "version", 0, "版本：省略=最新发布 / -1=草稿 / N>0=指定")
 	cmd.Flags().BoolVar(&wait, "wait", false, "轮询直到运行终态")
+	cmd.Flags().BoolVar(&stream, "stream", false, "订阅 SSE 实时事件流（不可用则自动回退轮询）")
 	return cmd
 }
 

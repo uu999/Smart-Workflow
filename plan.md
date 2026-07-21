@@ -264,10 +264,10 @@ M8 反思后先行去风险（参考 Byteval workflow builder 实证，见下）
      validator/render/scope 同一套类型词汇，避免 CLI 锁死难改的契约债（TD-12）
 ```
 
-### M9-a · Redis 缓存 + 异步执行（M-CACHE + M-ASYNC）
+### M9-a · Redis 缓存 + 异步执行（M-CACHE + M-ASYNC）✅ 已完成
 ```text
 交付：
-  Redis：定义缓存 swf:def / 引擎缓存 swf:plan / 运行态 swf:run / 运行锁
+  Redis：定义缓存 swf:def / 引擎缓存 swf:plan（键预留）/ 运行态 swf:run（键预留）/ 运行锁
   asynq：长工作流入队，swf-worker 消费；run 立即返回 runID
     —— 复用 M4 的 engine.Run(ctx, runID)，worker 只是它的调用方之一
   失败重试 + 并发闸门（worker 并发度可配）+ 优先级队列（调试优先/批量靠后）
@@ -275,16 +275,86 @@ M8 反思后先行去风险（参考 Byteval workflow builder 实证，见下）
 验收：
   长任务异步跑不卡请求；服务重启后 worker 能捡回在途任务；
   引擎缓存命中省重复构建；轮询能拿到运行状态
+落地说明：
+  internal/cache：Store 接口（GetBytes/SetBytes/Del）+ RedisStore（go-redis v9）
+    + MemStore（内存实现，供单测无需真 Redis）；键集中在 keys.go（swf:def/plan/run）
+  internal/async：TypeRunWorkflow 任务（payload 只带 runID，状态全在 DB）；
+    Enqueuer（asynq client，TaskID(runID) 去重＝运行锁，MaxRetry 重试）；
+    RunProcessor（asynq.Handler：解 payload → engine.Run；坏 payload SkipRetry，
+    业务失败正常重试）；优先级队列 debug>default>batch（QueueWeights 权重）；
+    Submitter（实现 api.RunSubmitter：Submit=入队，Shutdown=关 client）；
+    NewServer/NewMux（worker 端装配）
+  API 解耦：抽 RunSubmitter 接口 { Submit(runID)bool; Shutdown(ctx)error }，
+    进程内 RunDispatcher（M6 兜底）与 async.Submitter（M9-a）双实现，
+    createRun handler 零改动（编译期断言两实现都满足接口）
+  引擎缓存：engine.WithCache 可选注入 DSLCache；loadDSL 对已发布版本先查
+    swf:def:{wf}:{ver}（命中省 MySQL 读，TTL 1h），草稿(-1)可变不缓存；
+    nil cache 时行为与之前完全一致（现有测试不受影响）
+  装配：cmd/server 按 config.Redis.Addr 是否配置切 asynq/dispatcher + 启用缓存；
+    cmd/worker 新增（asynq server 消费三队列 + engine + 优雅退出）；
+    Makefile 加 run-worker；docker-compose 已含 redis
+  测试：cache round-trip/TTL/键、async payload/任务选项/processor（成功/重试/
+    SkipRetry）、engine 缓存命中与草稿不缓存；-race 全绿、vet（含 integration）干净
+范围界定（诚实说明）：
+  - 运行态查询：GET /runs/{id} 仍以 MySQL 为权威源（已满足验收）；swf:run 键已预留，
+    Redis 状态镜像作为后续读快路径的挂点，本阶段不引入一致性负担
+  - 引擎缓存：本阶段落 swf:def（DSL 缓存）；swf:plan（构建好的 Plan 缓存）键已预留，
+    因 builder.Plan 含函数式执行器绑定不宜直接 JSON 序列化，留待需要时以 DSL 重建
+  - "重启捡回在途任务"：asynq 任务持久在 Redis，worker 重启自动续跑，无需额外代码
+  - 未做容器化 server/worker 镜像（无 Dockerfile），worker 以二进制/`make run-worker` 运行
 ```
 
-### M9-b · SSE 流式推送（M-CACHE 事件流）
+### M9-b · SSE 流式推送（M-CACHE 事件流）✅ 已完成
 ```text
 交付：
   运行事件写 Redis Stream：swf:run:{id}:events
-  SSE 接口：GET /runs/{id}/events，推 node start/process/end 事件
+  SSE 接口：GET /runs/{id}/events，推 node_start/node_end/run_end 事件
   swf run --stream：CLI 订阅并打印每步（对标 PaiFlow /api/workflow/chat）
 验收：
   run --stream 实时看到每个节点的状态流转与输出，无需轮询
+反思决策（承重项，先复盘再落）：
+  ① 风险1（跨进程）：事件产生在执行侧，SSE 在 server 侧——asynq 模式下 engine.Run
+     跑在 worker 进程，内存 channel 传不到 server。决策：内存+Redis 双路径——
+     dispatcher 模式用进程内 MemHub，asynq 模式用 Redis Stream 跨进程
+  ② 风险2（不耦合 Redis）：scheduler 是纯执行核心，绝不能 import redis。决策：
+     注入 runevent.Emitter 接口（nil→NopEmitter 零开销），engine 不感知事件落到哪
+  ③ 风险3（契约锁死）：事件 schema 若直接复用 node_run 落库字段会被 DB 绑死。
+     决策：独立叶子包 runevent（零内部依赖），CostMs 用毫秒整数、Status 用字符串，
+     面向 --stream/前端画布稳定，与落库字段解耦
+  ④ 风险4（缺 node_start）：只发结束事件则画布只能看到跳变。决策：调度 loop 派发
+     节点前发 node_start（单线程内分配单调 seq，有序）
+  ⑤ 风险5（生命周期）：SSE 不收敛会泄漏。决策：run_end 关 channel + ctx.Done 退订，
+     且 run_end 落库后再发（收到即可 GET /runs/{id} 读到终态）
+  ⑥ 风险6（无 Redis 时 --stream）：dispatcher 模式没有 Stream。决策：MemHub 兼作
+     Emitter+Source；未装配事件源时 SSE 回 501，CLI 自动回退轮询
+落地说明：
+  internal/runevent：叶子包，RunEvent DTO + Emitter 接口 + NopEmitter；
+    Phase 常量 node_start/node_end/run_end；NowMillis 生成 TS
+  scheduler/engine：Options.Emitter 注入；coord.emit 在单线程 loop 内分配 seq 并
+    发 node_start（派发前）/node_end（终态回收时）；engine.WithEmitter 注入，
+    persistFinal 成功后 emitRunEnd（落库后再发，保证终态可读）
+  internal/eventbus：Source 订阅抽象；MemHub（进程内 pub/sub，非阻塞 fan-out、
+    满则丢中间事件、run_end 关闭并清理、ctx 退订）；RedisEmitter（异步缓冲 XADD、
+    单 drain 保 FIFO、run_end 尽力送达并设 TTL）；RedisSource（XREAD 阻塞转 channel、
+    从流头读补齐历史、遇 run_end 关闭）；StreamKey=cache.RunKey(id)+":events"
+  API：GET /v1/runs/:id/events（gin c.Stream）；Deps.EventSource 注入；无源回 501；
+    迟到订阅（run 已终态）直接回放 node_run 快照+合成 run_end；15s 心跳兼终态兜底
+  CLI：swf run --stream 订阅 SSE 逐行打 NDJSON envelope，见 run_end 收流再拉终态；
+    501/连接失败自动回退 pollRun（任何部署形态都能拿到终态）
+  装配：cmd/server dispatcher 模式共享一个 MemHub 作 engine Emitter + SSE Source；
+    asynq 模式 server 用 RedisSource、worker 用 RedisEmitter（cache.NewRedisClient 共享配置）
+  测试：eventbus（MemHub 发布/run_end 关闭/多订阅者/隔离/退订/慢消费不阻塞、
+    Redis 侧编译期接口断言、StreamKey）；api（501 回退、SSE 帧格式、终态回放、
+    终态判定）；cli（流式消费+终态、501 回退轮询）；-race 全绿、vet（含 integration）干净
+范围界定（诚实说明）：
+  - 断点续传：RunEvent.Seq 已随 SSE id 下发、Redis message id 天然有序，但客户端
+    未实现 Last-Event-ID 重连补发；重连当前从流头重放（已发布事件 Redis 保留 6h）
+  - process 事件：设计文档提到 node "process" 中间态，本阶段落 node_start/node_end/
+    run_end 三相已满足"看每步状态流转+输出"验收；节点内进度（如 LLM token 流）
+    需执行器透出，留待有需求时扩 Phase
+  - 背压策略：MemHub/RedisEmitter 缓冲满时丢中间事件（SSE 是尽力而为的实时视图，
+    权威状态在 MySQL），run_end 例外——尽力送达以保证客户端收敛
+  - 鉴权/限流：SSE 端点复用现有中间件，未额外加长连接数配额，随 M10 加固一并处理
 ```
 
 ### M10 · 端到端样例 + 加固

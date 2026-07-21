@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"time"
@@ -10,10 +11,22 @@ import (
 
 	"github.com/smart-workflow/smart-workflow/internal/config"
 	"github.com/smart-workflow/smart-workflow/internal/engine"
+	"github.com/smart-workflow/smart-workflow/internal/eventbus"
 	"github.com/smart-workflow/smart-workflow/internal/httpx"
 	"github.com/smart-workflow/smart-workflow/internal/service"
 	"github.com/smart-workflow/smart-workflow/internal/storage/mysql"
 )
+
+// RunSubmitter 抽象"提交一个已落 pending 的 run 去后台执行"。
+// 两种实现满足它：进程内 RunDispatcher（M6 兜底）与 asynq 入队器（M9-a），
+// createRun handler 只依赖此接口，切换执行后端不改 handler。
+type RunSubmitter interface {
+	// Submit 尝试提交 run 去执行；返回 false 表示拒绝（满载/关停/入队失败），
+	// 调用方应把 run 落 failed 并回 503。
+	Submit(runID string) bool
+	// Shutdown 优雅停机（drain 在途 / 关闭客户端）。
+	Shutdown(ctx context.Context) error
+}
 
 // Deps 是构造路由所需的依赖（M6：接上 store + engine + services）。
 type Deps struct {
@@ -21,9 +34,12 @@ type Deps struct {
 	Logger *zap.Logger
 	Store  *mysql.Store
 	Engine *engine.Engine
-	// Dispatcher 后台运行调度器（硬伤1）。为空时按默认并发构造；
-	// 调用方（main）通常自建并持有引用以便优雅退出时 Shutdown。
-	Dispatcher *RunDispatcher
+	// Runner 后台运行提交器（RunDispatcher 或 asynq 入队器）。为空时按默认
+	// 进程内 dispatcher 构造；调用方（main）通常自建并持有引用以便优雅退出时 Shutdown。
+	Runner RunSubmitter
+	// EventSource 运行事件订阅源（M9-b SSE）。dispatcher 模式传共享 MemHub，
+	// asynq 模式传 RedisSource。为空时 GET /runs/:id/events 回 501（CLI 回退轮询）。
+	EventSource eventbus.Source
 }
 
 // handlers 聚合各资源 service，供 handler 方法使用。
@@ -31,7 +47,8 @@ type handlers struct {
 	cfg       *config.Config
 	logger    *zap.Logger
 	engine    *engine.Engine
-	runner    *RunDispatcher
+	runner    RunSubmitter
+	events    eventbus.Source
 	projects  *service.ProjectService
 	apps      *service.ApplicationService
 	workflows *service.WorkflowService
@@ -57,7 +74,7 @@ func NewRouter(d Deps) *gin.Engine {
 
 	// M6：仅在 store 就绪时挂载资源路由（测试可只传 Cfg+Logger 复用探针）。
 	if d.Store != nil {
-		runner := d.Dispatcher
+		runner := d.Runner
 		if runner == nil {
 			runner = NewRunDispatcher(d.Engine, d.Logger, 0)
 		}
@@ -66,6 +83,7 @@ func NewRouter(d Deps) *gin.Engine {
 			logger:    d.Logger,
 			engine:    d.Engine,
 			runner:    runner,
+			events:    d.EventSource,
 			projects:  service.NewProjectService(d.Store),
 			apps:      service.NewApplicationService(d.Store),
 			workflows: service.NewWorkflowService(d.Store),
@@ -116,6 +134,7 @@ func (h *handlers) register(v1 *gin.RouterGroup) {
 		runs.POST("", h.createRun)
 		runs.GET("", h.listRuns)
 		runs.GET("/:id", h.getRun)
+		runs.GET("/:id/events", h.streamRun) // M9-b：SSE 实时事件流
 	}
 
 	// 无状态单节点调试（风险1）：吃渲染后的 DSL 节点，不需 workflowID，

@@ -5,7 +5,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/smart-workflow/smart-workflow/internal/async"
 	"github.com/smart-workflow/smart-workflow/internal/engine"
+)
+
+// 编译期确认两种后台执行后端都满足 RunSubmitter：
+// 进程内 RunDispatcher（M6 兜底）与 asynq 入队器（M9-a）可互换注入，
+// createRun handler 无需感知具体实现。
+var (
+	_ RunSubmitter = (*RunDispatcher)(nil)
+	_ RunSubmitter = (*async.Submitter)(nil)
 )
 
 // Shutdown 后 Submit 必须返回 false（停止接收新 run），避免关停期堆积僵尸 run。

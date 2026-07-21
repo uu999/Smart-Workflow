@@ -16,6 +16,7 @@ help:
 	@echo "  migrate-up     goose up (needs infra-up)"
 	@echo "  migrate-down   goose down"
 	@echo "  run-server     run gin API server"
+	@echo "  run-worker     run asynq worker (needs redis)"
 	@echo "  sidecar-install create venv + install deps"
 	@echo "  run-sidecar    run FastAPI sidecar"
 
@@ -50,6 +51,9 @@ migrate-down:
 
 run-server:
 	go run ./cmd/server
+
+run-worker:
+	go run ./cmd/worker
 
 sidecar-install:
 	cd sidecar && python3 -m venv .venv && ./.venv/bin/pip install -q --upgrade pip && ./.venv/bin/pip install -q -r requirements.txt
