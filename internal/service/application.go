@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/smart-workflow/smart-workflow/internal/storage/mysql"
 	"github.com/smart-workflow/smart-workflow/internal/storage/mysql/gen"
@@ -118,6 +119,30 @@ func (s *ApplicationService) List(ctx context.Context, projectID string, limit, 
 	return out, nil
 }
 
+// Search 按项目 + 名称模糊搜索应用（M8 能力发现）。name 为空时匹配全部。
+func (s *ApplicationService) Search(ctx context.Context, projectID, name string, limit, offset int32) ([]ApplicationSummary, error) {
+	rows, err := s.store.Q.SearchApplications(ctx, gen.SearchApplicationsParams{
+		ProjectID: projectID,
+		Name:      likePattern(name),
+		Limit:     limit,
+		Offset:    offset,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("search applications: %w", err)
+	}
+	out := make([]ApplicationSummary, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ApplicationSummary{
+			AppID:     r.AppID,
+			ProjectID: r.ProjectID,
+			Name:      r.Name,
+			Kind:      r.Kind,
+			Status:    r.Status,
+		})
+	}
+	return out, nil
+}
+
 // Update 修改应用 name/kind/schema/config。schema/config 若非空须为合法 JSON。
 func (s *ApplicationService) Update(ctx context.Context, appID, name, kind string, inputSchema, outputSchema, config json.RawMessage) error {
 	in, err := normalizeJSON(inputSchema)
@@ -171,4 +196,15 @@ func normalizeJSON(raw json.RawMessage) (json.RawMessage, error) {
 		return nil, ErrInvalidJSON
 	}
 	return raw, nil
+}
+
+// likePattern 把用户搜索词转成 SQL LIKE 模式：空串→"%"（匹配全部），
+// 否则转义 LIKE 元字符（\ % _）后包成 %term%（子串匹配）。
+func likePattern(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "%"
+	}
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return "%" + r.Replace(name) + "%"
 }

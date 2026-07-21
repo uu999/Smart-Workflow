@@ -135,6 +135,70 @@ func (q *Queries) ListApplications(ctx context.Context, arg ListApplicationsPara
 	return items, nil
 }
 
+const searchApplications = `-- name: SearchApplications :many
+SELECT id, app_id, project_id, name, kind, status, created_at, updated_at
+FROM application
+WHERE project_id = ? AND name LIKE ? AND deleted_at IS NULL
+ORDER BY id DESC
+LIMIT ? OFFSET ?
+`
+
+type SearchApplicationsParams struct {
+	ProjectID string `json:"project_id"`
+	Name      string `json:"name"`
+	Limit     int32  `json:"limit"`
+	Offset    int32  `json:"offset"`
+}
+
+type SearchApplicationsRow struct {
+	ID        uint64    `json:"id"`
+	AppID     string    `json:"app_id"`
+	ProjectID string    `json:"project_id"`
+	Name      string    `json:"name"`
+	Kind      string    `json:"kind"`
+	Status    int8      `json:"status"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// 按项目 + 名称模糊搜索（name LIKE，调用方传 %term% 或 % 匹配全部）。
+func (q *Queries) SearchApplications(ctx context.Context, arg SearchApplicationsParams) ([]SearchApplicationsRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchApplications,
+		arg.ProjectID,
+		arg.Name,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchApplicationsRow{}
+	for rows.Next() {
+		var i SearchApplicationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.AppID,
+			&i.ProjectID,
+			&i.Name,
+			&i.Kind,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const softDeleteApplication = `-- name: SoftDeleteApplication :execresult
 UPDATE application
 SET deleted_at = NOW()

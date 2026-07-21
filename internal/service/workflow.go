@@ -197,6 +197,31 @@ func (s *WorkflowService) List(ctx context.Context, projectID string, limit, off
 	return out, nil
 }
 
+// Search 按项目 + 名称模糊搜索工作流（复用优先：先搜可复用工作流）。
+func (s *WorkflowService) Search(ctx context.Context, projectID, name string, limit, offset int32) ([]WorkflowSummary, error) {
+	rows, err := s.store.Q.SearchWorkflows(ctx, gen.SearchWorkflowsParams{
+		ProjectID: projectID,
+		Name:      likePattern(name),
+		Limit:     limit,
+		Offset:    offset,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("search workflows: %w", err)
+	}
+	out := make([]WorkflowSummary, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, WorkflowSummary{
+			WorkflowID:   r.WorkflowID,
+			ProjectID:    r.ProjectID,
+			Name:         r.Name,
+			Description:  r.Description,
+			PublishedVer: r.PublishedVer,
+			Status:       r.Status,
+		})
+	}
+	return out, nil
+}
+
 // Delete 软删除工作流。
 func (s *WorkflowService) Delete(ctx context.Context, workflowID string) error {
 	res, err := s.store.Q.SoftDeleteWorkflow(ctx, workflowID)

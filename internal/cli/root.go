@@ -39,6 +39,9 @@ func NewRootCmd(out io.Writer) *cobra.Command {
 
 	root.AddCommand(
 		newInitCmd(app),
+		newSearchCmd(app),
+		newAppSchemaCmd(app),
+		newScopeCmd(app),
 		newAddNodeCmd(app),
 		newAddEdgeCmd(app),
 		newBindCmd(app),

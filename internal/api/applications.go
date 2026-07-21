@@ -51,7 +51,17 @@ func (h *handlers) listApplications(c *gin.Context) {
 		return
 	}
 	limit, offset := pageParams(c)
-	items, err := h.apps.List(c.Request.Context(), projectID, limit, offset)
+	// ?name= 存在时走模糊搜索（M8 search）；否则普通分页列表。
+	name, searching := c.GetQuery("name")
+	var (
+		items any
+		err   error
+	)
+	if searching {
+		items, err = h.apps.Search(c.Request.Context(), projectID, name, limit, offset)
+	} else {
+		items, err = h.apps.List(c.Request.Context(), projectID, limit, offset)
+	}
 	if err != nil {
 		failFromErr(c, err)
 		return

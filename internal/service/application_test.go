@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+// TestLikePattern 覆盖搜索词 → LIKE 模式：空串匹配全部，元字符转义防注入式通配。
+func TestLikePattern(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", "%"},
+		{"   ", "%"},
+		{"qwen", "%qwen%"},
+		{"情感分类", "%情感分类%"},
+		{"50%", `%50\%%`},       // % 转义
+		{"a_b", `%a\_b%`},       // _ 转义
+		{`x\y`, `%x\\y%`},       // \ 转义
+	}
+	for _, tc := range cases {
+		if got := likePattern(tc.in); got != tc.want {
+			t.Errorf("likePattern(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+
 func TestNormalizeJSON(t *testing.T) {
 	cases := []struct {
 		name    string

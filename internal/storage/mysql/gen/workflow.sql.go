@@ -150,6 +150,73 @@ func (q *Queries) PublishWorkflow(ctx context.Context, arg PublishWorkflowParams
 	return q.db.ExecContext(ctx, publishWorkflow, arg.PublishedVer, arg.WorkflowID)
 }
 
+const searchWorkflows = `-- name: SearchWorkflows :many
+SELECT id, workflow_id, project_id, name, description,
+       published_ver, status, created_at, updated_at
+FROM workflow
+WHERE project_id = ? AND name LIKE ? AND deleted_at IS NULL
+ORDER BY id DESC
+LIMIT ? OFFSET ?
+`
+
+type SearchWorkflowsParams struct {
+	ProjectID string `json:"project_id"`
+	Name      string `json:"name"`
+	Limit     int32  `json:"limit"`
+	Offset    int32  `json:"offset"`
+}
+
+type SearchWorkflowsRow struct {
+	ID           uint64    `json:"id"`
+	WorkflowID   string    `json:"workflow_id"`
+	ProjectID    string    `json:"project_id"`
+	Name         string    `json:"name"`
+	Description  string    `json:"description"`
+	PublishedVer int32     `json:"published_ver"`
+	Status       int8      `json:"status"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// 按项目 + 名称模糊搜索（复用优先：Agent 先搜可复用工作流）。
+func (q *Queries) SearchWorkflows(ctx context.Context, arg SearchWorkflowsParams) ([]SearchWorkflowsRow, error) {
+	rows, err := q.db.QueryContext(ctx, searchWorkflows,
+		arg.ProjectID,
+		arg.Name,
+		arg.Limit,
+		arg.Offset,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SearchWorkflowsRow{}
+	for rows.Next() {
+		var i SearchWorkflowsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkflowID,
+			&i.ProjectID,
+			&i.Name,
+			&i.Description,
+			&i.PublishedVer,
+			&i.Status,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const softDeleteWorkflow = `-- name: SoftDeleteWorkflow :execresult
 UPDATE workflow
 SET deleted_at = NOW()

@@ -29,6 +29,10 @@ type Querier interface {
 	ListWorkflows(ctx context.Context, arg ListWorkflowsParams) ([]ListWorkflowsRow, error)
 	MaxWorkflowVersion(ctx context.Context, workflowID string) (interface{}, error)
 	PublishWorkflow(ctx context.Context, arg PublishWorkflowParams) (sql.Result, error)
+	// 按项目 + 名称模糊搜索（name LIKE，调用方传 %term% 或 % 匹配全部）。
+	SearchApplications(ctx context.Context, arg SearchApplicationsParams) ([]SearchApplicationsRow, error)
+	// 按项目 + 名称模糊搜索（复用优先：Agent 先搜可复用工作流）。
+	SearchWorkflows(ctx context.Context, arg SearchWorkflowsParams) ([]SearchWorkflowsRow, error)
 	SoftDeleteApplication(ctx context.Context, appID string) (sql.Result, error)
 	SoftDeleteProject(ctx context.Context, projectID string) (sql.Result, error)
 	SoftDeleteWorkflow(ctx context.Context, workflowID string) (sql.Result, error)

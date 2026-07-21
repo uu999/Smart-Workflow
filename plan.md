@@ -231,14 +231,37 @@ M7 反思后先行去风险（已落地，见下）：
   ④ 风险1：新增无状态 POST /v1/node-debug（吃渲染后 DSL 节点，不需 workflowID）
 ```
 
-### M8 · 能力发现（M-CATALOG）
+### M8 · 能力发现（M-CATALOG）✅ 已完成
 ```text
 交付：
-  swf search（app/workflow/dataset）
-  swf app-schema（拉 schema 缓存到 app_cache）
-  swf scope（按连通性+类型过滤可绑定候选）
+  swf search（application / workflow；dataset 明确 NOT_SUPPORTED，缓期 M10）
+  swf app-schema（拉 schema → 解析端口 → 缓存 app_cache + 物化进 IR 节点）
+  swf scope（按连通性 + 类型过滤可绑定候选，把"猜端口"变"选端口"）
 验收：
   Agent 能先 search 再 app-schema 再 scope，把"猜端口"变"选端口"
+落地说明：
+  服务端 search：application.sql / workflow.sql 加 SearchApplications /
+    SearchWorkflows（WHERE project_id=? AND name LIKE ?），sqlc 重生成；
+    service 层 Search 方法 + likePattern（空=%匹配全部，转义 \ % _ 防通配注入）；
+    API 层 list handler 感知 ?name= 存在即走 Search，否则原 List（契约兼容）
+  schema 格式（internal/catalog）：input_schema/output_schema 约定为「端口数组」
+    [{"name","type","required","desc"}]，type 用字符串，与 dsl.Port 一一对应；
+    ParsePortList / ParseAppSchema 解析，空→nil、缺 name/type→error
+  CLI：search 转发服务端；app-schema 拉详情→解析→WriteAppCache+回填节点端口；
+    scope 进程内复用 dsl.BuildDeps 求传递上游 + 类型过滤，零成本离线
+  测试：catalog 解析单测、likePattern 单测、CLI search/app-schema/scope
+    httptest 单测（含 dataset NOT_SUPPORTED、端口物化进 IR、连通性+类型过滤）；
+    -race 全绿、vet（含 -tags integration）干净
+M8 反思后先行去风险（参考 Byteval workflow builder 实证，见下）：
+  ① 风险1（承重）：设计 §10.5 字面说"render 读 app_cache 补端口"，但查 Byteval
+     真实 .wb_sessions/*/ir.json —— 每个节点的 inputs/outputs 都内联在 IR 里，
+     app_cache 只是记录。故决策：app-schema 把端口物化进 IR 节点（cache 为记录），
+     render 无需重写、IR 自包含性保留。渲染层零改动
+  ② 风险2（承重）：无 dataset 表 + 无节点执行器 → M8 search 只做 app+workflow，
+     dataset 存储/执行器随 M10 "评测集→分类器" E2E 一起落，避免造空壳
+  ③ 风险3（契约锁死）：app schema 无格式约定 → 采用端口数组（参考 Byteval 端口
+     列表结构，但用 SWF 字符串 type 而非 PaiFlow 整数 value_type），与既有
+     validator/render/scope 同一套类型词汇，避免 CLI 锁死难改的契约债（TD-12）
 ```
 
 ### M9-a · Redis 缓存 + 异步执行（M-CACHE + M-ASYNC）

@@ -144,6 +144,12 @@ func (s *Session) AppCachePath(appID string) string {
 	return filepath.Join(s.dir, dirApp, appID+".json")
 }
 
+// WriteAppCache 把应用 schema 原文缓存到 app_cache/<appID>.json（记录/审计用；
+// IR 节点端口才是渲染真相源，见 app-schema 命令的物化逻辑）。
+func (s *Session) WriteAppCache(appID string, v any) error {
+	return writeJSONAtomic(s.AppCachePath(appID), v)
+}
+
 // writeJSONAtomic 原子写 JSON：写 .tmp 再 rename，避免半截文件。
 func writeJSONAtomic(path string, v any) error {
 	b, err := json.MarshalIndent(v, "", "  ")

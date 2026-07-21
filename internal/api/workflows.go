@@ -48,7 +48,17 @@ func (h *handlers) listWorkflows(c *gin.Context) {
 		return
 	}
 	limit, offset := pageParams(c)
-	items, err := h.workflows.List(c.Request.Context(), projectID, limit, offset)
+	// ?name= 存在时走模糊搜索（M8 search，复用优先）；否则普通分页列表。
+	name, searching := c.GetQuery("name")
+	var (
+		items any
+		err   error
+	)
+	if searching {
+		items, err = h.workflows.Search(c.Request.Context(), projectID, name, limit, offset)
+	} else {
+		items, err = h.workflows.List(c.Request.Context(), projectID, limit, offset)
+	}
 	if err != nil {
 		failFromErr(c, err)
 		return
