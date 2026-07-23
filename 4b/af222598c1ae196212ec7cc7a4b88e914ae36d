@@ -1,0 +1,38 @@
+internal/cli/clone_cmd.go
+  s_d2adda66c61afb::t_26d359dc6972fa 1-81
+internal/validator/validator_test.go
+  s_d2adda66c61afb::t_eb5ea41edec95e 172-221
+internal/cli/plan_cmd_test.go
+  s_d2adda66c61afb::t_dbf937e9a75caf 8-9
+  s_d2adda66c61afb::t_6990e1740540e8 1-7,10-153
+  s_d2adda66c61afb::t_68186bd63cb28b 154-238
+internal/cli/plan_cmd.go
+  s_d2adda66c61afb::t_20b486bada1e24 1-27,48-161,163-168,170-172,183-215
+  s_d2adda66c61afb::t_fc2a87ef4d9594 162,169,173-182
+  s_d2adda66c61afb::t_69abbfc1efbd81 216-237,240-249
+  s_d2adda66c61afb::t_afbb0d29b54421 238-239
+  s_d2adda66c61afb::t_1fd09294812ffe 28-47
+internal/validator/validator.go
+  s_d2adda66c61afb::t_84dab30872efd0 208-217,224-228,237-262
+  s_d2adda66c61afb::t_a8e66b325ccae6 263
+internal/cli/clone_cmd_test.go
+  s_d2adda66c61afb::t_478d7be6789ff7 1-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "4baf222598c1ae196212ec7cc7a4b88e914ae36d",
+  "prompts": {},
+  "sessions": {
+    "s_d2adda66c61afb": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a5e2da6d643d95335f42969",
+        "model": "openrouter-3o__max"
+      },
+      "human_author": "renming.010207 <renming.010207@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
