@@ -1,0 +1,29 @@
+# swf：面向 Agent 的 CLI。与 server/worker 不同，它是「跑完即退」的命令行工具，
+# 不是常驻服务、不进 compose 的默认启动集；打成镜像便于在容器网络内直接调 server：
+#
+#   docker build -f deployments/Dockerfile.swf -t swf-cli .
+#   docker run --rm --network smart-workflow_default \
+#     -e SWF_SERVER_URL=http://server:8080 swf-cli search --kind application --query cls
+#
+# 结构同其余 Go 服务（多阶段 + 静态 + alpine）。
+
+FROM golang:1.26-alpine AS builder
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" \
+    -o /out/swf ./cmd/swf
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates \
+    && adduser -D -u 10001 swf
+USER swf
+WORKDIR /work
+COPY --from=builder /out/swf /usr/local/bin/swf
+
+# CLI 无常驻进程，不设 HEALTHCHECK。默认打印帮助。
+ENTRYPOINT ["swf"]

@@ -1,0 +1,32 @@
+# migrate：一次性建表服务。跑 goose up 后即退出，compose 里被 server/worker 用
+# depends_on: service_completed_successfully 等待，实现「一键起五件套且自动建表」。
+#
+#   docker build -f deployments/Dockerfile.migrate -t swf-migrate .
+#
+# 设计取舍：
+#   - goose 版本 pin 到 v3.27.2（与本地 make migrate-up 所用一致，可复现）；
+#   - 迁移 SQL 用 COPY 烘进镜像（migrations/ 内 .sql 是 goose 注解式，见 00001_init.sql）；
+#   - 连接串走 GOOSE_DBSTRING 环境变量注入（compose 指向 mysql:3306），不写死；
+#   - goose 幂等：已应用的版本会跳过，重复启动安全。
+
+FROM golang:1.26-alpine AS builder
+# 纯 Go 安装 goose CLI（静态），装到 /out 便于 COPY
+ENV CGO_ENABLED=0
+RUN go install github.com/pressly/goose/v3/cmd/goose@v3.27.2 \
+    && cp "$(go env GOPATH)/bin/goose" /out-goose
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates \
+    && adduser -D -u 10001 swf
+COPY --from=builder /out-goose /usr/local/bin/goose
+# 迁移脚本烘进镜像（只读）
+COPY migrations /migrations
+USER swf
+WORKDIR /migrations
+
+# GOOSE_DRIVER/GOOSE_DBSTRING 由 compose 注入。默认驱动 mysql；
+# 连接串必须指向容器内地址（mysql:3306），不是宿主机映射端口。
+ENV GOOSE_DRIVER=mysql
+
+# 跑 up 后退出（退出码 0 = 成功，供 compose service_completed_successfully 判定）
+ENTRYPOINT ["goose", "-dir", "/migrations", "up"]

@@ -1,0 +1,35 @@
+# sidecar：Python FastAPI，执行用户 Python 代码节点（子进程隔离）。
+# 构建上下文为仓库根（与其余 Dockerfile 一致，复用根 .dockerignore 排除 .venv）。
+#
+#   docker build -f deployments/Dockerfile.sidecar -t swf-sidecar .
+#
+# 关键取舍：
+#   - 运行期务必 --host 0.0.0.0（不是 Makefile 本地开发用的 127.0.0.1）：
+#     否则 server 从另一个容器调 http://sidecar:8090 会被拒（见 pre-mortem R2）；
+#   - 先 COPY requirements.txt 再 pip install，命中层缓存；
+#   - 非 root 运行；子进程执行用户代码的沙箱由 runner.py 负责（本阶段 MVP 子进程隔离）。
+
+FROM python:3.12-slim
+
+# 便于容器内 healthcheck 与排障；--no-install-recommends 控体积
+RUN useradd -m -u 10001 swf
+
+WORKDIR /app
+
+# 依赖层
+COPY sidecar/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 源码层：main.py / runner.py / contract（golden 供契约测试，运行不依赖但无害）
+COPY sidecar/main.py sidecar/runner.py ./
+COPY sidecar/contract ./contract
+
+USER swf
+EXPOSE 8090
+
+# 容器内探针：sidecar 有 /healthz。用 python 内置 urllib，免装 curl/wget。
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=5 \
+    CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8090/healthz').status==200 else 1)" || exit 1
+
+# 生产用 uvicorn 起 FastAPI；绑 0.0.0.0 供跨容器访问
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8090"]

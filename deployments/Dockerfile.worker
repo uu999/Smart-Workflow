@@ -1,0 +1,29 @@
+# swf-worker：asynq 消费者，从 Redis 取 run 任务调 engine.Run。
+# 结构同 Dockerfile.server（多阶段 + 静态 + alpine）。
+#
+#   docker build -f deployments/Dockerfile.worker -t swf-worker .
+#
+# 注意：worker 无 HTTP 端口，healthcheck 只能靠进程存活（compose 侧用 pgrep 兜底）。
+
+FROM golang:1.26-alpine AS builder
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" \
+    -o /out/swf-worker ./cmd/worker
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates tzdata procps \
+    && adduser -D -u 10001 swf
+USER swf
+COPY --from=builder /out/swf-worker /usr/local/bin/swf-worker
+
+# worker 无 HTTP 探针：进程还在即视为健康（真实运行健康由 asynq 队列指标观测）
+HEALTHCHECK --interval=15s --timeout=3s --start-period=15s --retries=5 \
+    CMD pgrep -f swf-worker > /dev/null || exit 1
+
+ENTRYPOINT ["swf-worker"]

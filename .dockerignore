@@ -1,0 +1,32 @@
+# 构建上下文瘦身：只把源码 + go.mod/go.sum + migrations + sidecar 源码送进镜像。
+# 关键：排除 sidecar/.venv —— 那是宿主机(arm64/macOS)装的 Python 二进制，
+# 打进 linux 镜像会在运行期崩溃；requirements.txt 会在镜像内重新 pip install。
+
+# VCS / IDE
+.git
+.gitignore
+.idea
+.vscode
+
+# Go 本地产物 / 缓存
+bin/
+*.test
+*.out
+coverage*
+vendor/
+
+# Python 本地环境与缓存（务必排除，见上）
+sidecar/.venv
+**/__pycache__
+*.pyc
+*.pyo
+
+# CLI 本地会话 / 临时文件
+*.session.json
+.swf/
+tmp/
+*.log
+
+# 文档与部署清单本身（不需进镜像）
+*.md
+deployments/docker-compose.yaml

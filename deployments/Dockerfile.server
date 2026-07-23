@@ -1,0 +1,37 @@
+# swf-server：gin API 网关。多阶段构建 → 静态二进制 → alpine 运行层。
+# 构建上下文为仓库根（见 docker-compose.yaml 的 build.context: ..）。
+#
+#   docker build -f deployments/Dockerfile.server -t swf-server .
+#
+# 设计取舍：
+#   - CGO_ENABLED=0：MySQL 驱动是纯 Go，可静态编译，运行层无需 glibc；
+#   - alpine（非 distroless）：保留 shell 便于 `docker exec` 进容器排障（对齐「30 分钟起步」验收）；
+#   - 先 COPY go.mod/go.sum 再 download，命中层缓存，改代码不必重下依赖。
+
+FROM golang:1.26-alpine AS builder
+WORKDIR /src
+
+# 依赖层：仅在 go.mod/go.sum 变化时失效
+COPY go.mod go.sum ./
+RUN go mod download
+
+# 源码层
+COPY . .
+
+# 静态编译；-ldflags "-s -w" 去符号表减小体积
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" \
+    -o /out/swf-server ./cmd/server
+
+FROM alpine:3.20
+# ca-certificates：server 若需 HTTPS 出站（如 http application 节点访问外部）时用得上
+RUN apk add --no-cache ca-certificates tzdata wget \
+    && adduser -D -u 10001 swf
+USER swf
+COPY --from=builder /out/swf-server /usr/local/bin/swf-server
+
+EXPOSE 8080
+# 容器内探针：命中 /healthz（root 路由，不受 v1 鉴权/限流影响）
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=5 \
+    CMD wget -qO- http://127.0.0.1:8080/healthz || exit 1
+
+ENTRYPOINT ["swf-server"]
