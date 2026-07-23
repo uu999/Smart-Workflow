@@ -259,9 +259,17 @@ func TestM6_E2E_FullChain(t *testing.T) {
 	// 且不产生新的 pending run（坏图不落库）。
 	badDraft := e2eDSL()
 	badDraft.Nodes = badDraft.Nodes[1:] // 去掉 start::1
+	// 更新草稿走乐观锁：先 GET 读当前 version_lock 再回填（此前 publish 已把锁 +1，
+	// 不能硬编码 0，否则 UpdateDraft 的 WHERE version_lock=? 匹配不到 → VERSION_CONFLICT）。
+	_, envLock := h.do(t, http.MethodGet, "/v1/workflows/"+wfID, nil)
+	var curWF struct {
+		VersionLock int32 `json:"version_lock"`
+	}
+	dataInto(t, envLock, &curWF)
 	_, env = h.do(t, http.MethodPut, "/v1/workflows/"+wfID, map[string]any{
-		"name":  "e2e-wf",
-		"draft": badDraft,
+		"name":         "e2e-wf",
+		"draft":        badDraft,
+		"version_lock": curWF.VersionLock,
 	})
 	if !env.OK {
 		t.Fatalf("update draft to bad graph failed: %+v", env.Err)
