@@ -51,6 +51,7 @@ type handlers struct {
 	events    eventbus.Source
 	projects  *service.ProjectService
 	apps      *service.ApplicationService
+	datasets  *service.DatasetService
 	workflows *service.WorkflowService
 	runs      *service.RunService
 	validate  *service.ValidateService
@@ -70,6 +71,9 @@ func NewRouter(d Deps) *gin.Engine {
 	r.GET("/healthz/sidecar", sidecarProbe(d.Cfg))
 
 	v1 := r.Group("/v1")
+	// M10 加固：可选鉴权 + 限流（挂在 v1，healthz 不受影响）。
+	// 两者未配置时为 no-op（空 APIKeys=放行、rps<=0=不限流），既有测试零改动。
+	v1.Use(authMiddlewares(d.Cfg.Auth)...)
 	v1.GET("/ping", func(c *gin.Context) { httpx.OK(c, gin.H{"pong": true}) })
 
 	// M6：仅在 store 就绪时挂载资源路由（测试可只传 Cfg+Logger 复用探针）。
@@ -86,6 +90,7 @@ func NewRouter(d Deps) *gin.Engine {
 			events:    d.EventSource,
 			projects:  service.NewProjectService(d.Store),
 			apps:      service.NewApplicationService(d.Store),
+			datasets:  service.NewDatasetService(d.Store),
 			workflows: service.NewWorkflowService(d.Store),
 			runs:      service.NewRunService(d.Store),
 			validate:  service.NewValidateService(d.Store),
@@ -115,6 +120,15 @@ func (h *handlers) register(v1 *gin.RouterGroup) {
 		apps.GET("/:id", h.getApplication)
 		apps.PUT("/:id", h.updateApplication)
 		apps.DELETE("/:id", h.deleteApplication)
+	}
+
+	datasets := v1.Group("/datasets")
+	{
+		datasets.POST("", h.createDataset)
+		datasets.GET("", h.listDatasets)
+		datasets.GET("/:id", h.getDataset)
+		datasets.PUT("/:id", h.updateDataset)
+		datasets.DELETE("/:id", h.deleteDataset)
 	}
 
 	workflows := v1.Group("/workflows")

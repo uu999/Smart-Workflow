@@ -30,6 +30,8 @@ func failFromErr(c *gin.Context, err error) {
 		httpx.Fail(c, http.StatusBadRequest, "INVALID_VERSION", err.Error(), nil)
 	case errors.Is(err, service.ErrInvalidJSON):
 		httpx.Fail(c, http.StatusBadRequest, "INVALID_JSON", err.Error(), nil)
+	case errors.Is(err, service.ErrDatasetRowsNotArray):
+		httpx.Fail(c, http.StatusBadRequest, "INVALID_ROWS", err.Error(), nil)
 	default:
 		httpx.Fail(c, http.StatusInternalServerError, "INTERNAL", err.Error(), nil)
 	}

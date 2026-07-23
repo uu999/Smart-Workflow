@@ -1,0 +1,83 @@
+{
+  "workflow": {
+    "name": "情感评测样例",
+    "description": "评测集→分类器(逐条 batch)→结果合并→End 的端到端样例",
+    "project_id": "PROJECT_ID_PLACEHOLDER"
+  },
+  "nodes": [
+    {
+      "id": "start_0",
+      "kind": "start",
+      "title": "开始"
+    },
+    {
+      "id": "dataset_0",
+      "kind": "dataset",
+      "title": "情感评测集",
+      "dataset_id": "DATASET_ID_PLACEHOLDER",
+      "outputs": [
+        {"name": "rows", "type": "array"},
+        {"name": "count", "type": "number"}
+      ]
+    },
+    {
+      "id": "classifier_0",
+      "kind": "application",
+      "title": "情感分类器(规则版)",
+      "app_id": "APP_ID_PLACEHOLDER",
+      "inputs": [
+        {"name": "item", "type": "object", "required": true}
+      ],
+      "outputs": [
+        {"name": "query", "type": "string"},
+        {"name": "gold", "type": "string"},
+        {"name": "pred", "type": "string"}
+      ],
+      "batch": {
+        "enable": true,
+        "source_node": "dataset_0",
+        "source_port": "rows",
+        "item_name": "item"
+      },
+      "bindings": [
+        {"port": "item", "source_node": "dataset_0", "source_port": "rows"}
+      ]
+    },
+    {
+      "id": "merge_0",
+      "kind": "code",
+      "title": "结果合并+准召统计",
+      "params": {
+        "code": "rows = inputs.get('items', [])\ntotal = len(rows)\ncorrect = 0\ndetails = []\nfor r in rows:\n    o = r.get('outputs', r) if isinstance(r, dict) else {}\n    pred = o.get('pred')\n    gold = o.get('gold')\n    hit = (pred == gold)\n    if hit:\n        correct += 1\n    details.append({'query': o.get('query'), 'gold': gold, 'pred': pred, 'hit': hit})\nacc = round(correct / total, 4) if total else 0.0\nsink({'total': total, 'correct': correct, 'accuracy': acc, 'details': details})"
+      },
+      "inputs": [
+        {"name": "items", "type": "array"}
+      ],
+      "outputs": [
+        {"name": "total", "type": "number"},
+        {"name": "correct", "type": "number"},
+        {"name": "accuracy", "type": "number"},
+        {"name": "details", "type": "array"}
+      ],
+      "bindings": [
+        {"port": "items", "source_node": "classifier_0", "source_port": "items"}
+      ]
+    },
+    {
+      "id": "end_0",
+      "kind": "end",
+      "title": "结束",
+      "bindings": [
+        {"port": "accuracy", "mode": "ref", "source_node": "merge_0", "source_port": "accuracy"},
+        {"port": "total", "mode": "ref", "source_node": "merge_0", "source_port": "total"},
+        {"port": "details", "mode": "ref", "source_node": "merge_0", "source_port": "details"}
+      ]
+    }
+  ],
+  "edges": [
+    {"source": "start_0", "target": "dataset_0"},
+    {"source": "dataset_0", "target": "classifier_0"},
+    {"source": "classifier_0", "target": "merge_0"},
+    {"source": "merge_0", "target": "end_0"}
+  ]
+}

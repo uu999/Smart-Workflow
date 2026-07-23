@@ -32,8 +32,8 @@ func newSearchCmd(a *appCtx) *cobra.Command {
 				path = "/v1/workflows"
 			case dsl.KindDataset:
 				return a.emitErr(newErr("NOT_SUPPORTED",
-					"dataset search is not available in M8",
-					"dataset 存储与执行器随 M10 落地；M8 仅支持 application / workflow"))
+					"dataset search is not available via `search`",
+					"评测集用专用命令：swf dataset-list --project-id <id> [--name 关键词]"))
 			default:
 				return a.emitErr(newErr("BAD_REQUEST",
 					fmt.Sprintf("unknown --kind %q", kind),

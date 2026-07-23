@@ -360,12 +360,105 @@ M8 反思后先行去风险（参考 Byteval workflow builder 实证，见下）
 ### M10 · 端到端样例 + 加固
 ```text
 交付：
-  E2E 样例：评测集→分类器→结果导出
-  clone-ref + plan apply（复用与批量）
-  鉴权 API Key + 限流 + 优雅退出
-  部署文档 + README
+  E2E 样例：评测集(dataset)→分类器(application)→结果落地(用户在图内接「结果合并/写表」节点)
+  clone-ref + plan apply（复用与批量实例化）
+  可选鉴权 API Key + 限流 + 优雅退出（已有）
+  全容器化部署（server/worker/sidecar Dockerfile + compose）+ README
 验收：
-  新机器按文档 30 分钟起；样例一键跑通；失败有可读错误
+  新机器按 README 30 分钟起（docker compose 一键起五件套）；样例一键跑通；失败有可读错误
+落地进度（12/12 ✅ M10 完成）：
+  #26-#30 dataset 存储/执行器 DI/DatasetExecutor/ApplicationExecutor/batchWrap  ✅
+  #32 clone-ref  ✅   #33 plan-apply(声明式建图)+plan-schema  ✅
+  #34 可选鉴权 API Key + 限流(healthz/SSE 豁免，空配置放行)  ✅
+  #35 全容器化  ✅ —— 4 Dockerfile(server/worker/swf 多阶段静态→alpine；sidecar python:3.12-slim
+     绑 0.0.0.0) + migrate 一次性服务(goose v3.27.2 烘 migrations，depends mysql healthy 跑完即退) +
+     compose 补 5 服务(server/worker 经 SWF_* 注入容器内地址 mysql:3306/redis:6379/sidecar:8090，
+     depends migrate completed) + .dockerignore(排除 .venv 防 arm64 二进制污染) + Makefile up-all/docker-build
+  #36 E2E 样例 + README  ✅ —— examples/sentiment(dataset→分类器 batch→合并 code→End) 已真跑通
+     (run succeeded，accuracy=0.8333，6 行逐条走 sidecar)；补齐前置缺口：
+       · dataset 接入层(pre-mortem 抓出：有存储+执行器却无入口)：/v1/datasets CRUD + swf dataset-create/list/get
+       · plan-apply 补 batch+params 字段(否则声明式建图开不起 batch、塞不进 code)
+       · validator 理解 batch 语义(迭代输入 array→元素类型不报错；聚合输出 items/count 免声明)
+       · 顶层 README(架构图+30分钟起步+容器/本地双路径+batch vs plan-apply 辨析+鉴权说明)
+  #37 M10 全量验证  ✅ —— go build ✅ / go vet -tags integration ✅ / go test -race ./...(单元) ✅ /
+     完整 integration 套件(-tags integration -race，MySQL+真 sidecar) 14 包全绿 ✅ / gofmt 一致 ✅ /
+     5 Dockerfile + .dockerignore + compose 齐全(YAML 结构+接线断言过；docker 本机不可用故未 live 拉起)
+  #31 独立 export  ✗ 已撤销（见反思⑤：导出=图内节点，对齐 Byteval）
+  实证修复（真跑 integration/E2E 抓出，非设计文档能发现）：
+    · 存储层系统性 bug：nullable JSON 列存 SQL NULL → json.RawMessage 无法 Scan → Get 崩。
+      修 normalizeJSON 空输入返 "null" 字面量，一处修全 application(input/output_schema/config)+
+      dataset(col_schema)；ErrDatasetRowsNotArray→400 INVALID_ROWS
+    · M6_E2E 既有测试 bug：publish 把 version_lock+1，但后续 PUT 草稿硬编码锁 0 → 必冲突。
+      修为「先 GET 读锁再回填」，不脆弱
+    · 运维教训(E2E 真跑印证 #35 R3)：server 用 Redis 默认值走 asynq，若不起 worker 则 run 永远 pending
+  遗留(诚实说明)：容器五件套未在本机 live 拉起(开发机无 Docker)；README 已标注，待有 Docker 的机器验证
+反思决策（承重项，先对齐真实代码再落，纠正设计）：
+  ① 纠正1（执行器需 DB 访问）：现有执行器全无状态，ExecContext 只有 Node/Inputs/
+     Pool/RunID（node.go），拿不到 store；但 application 表已带 kind(http/python/rpc)+
+     config(endpoint/headers/code)。决策：不新造远程调用层——ApplicationExecutor 按
+     app_id 加载应用行，依 kind 委托给既有 HTTP/code 执行逻辑；store 访问经注册表 Config
+     注入 AppResolver/DatasetResolver 接口（沿用 CodeExecutor{SidecarURL} 的 DI 范式，
+     不碰全局单例）。顺带补齐 M8「application 节点可建不可执行」的缺口（scheduler.go:297
+     的 "no executor registered"）
+  ② 纠正2（扇出不改调度核心）：调度器是「每节点跑一次」的干净 DAG、node_run 与节点 1:1；
+     真做 scheduler fan-out 会让节点状态按 item 爆炸、破坏 node_run 映射。而 dsl.Batch
+     字段(SourceNode/ItemName/Size)已存在但只存不执行（render.go:156「MVP 无执行器」）。
+     决策：batch = 包在任意执行器外的通用 map 包装——node.Batch.Enable 时解析源数组，
+     逐 item 注入 ItemName 循环调底层执行器并聚合数组输出。调度器零改动，补上 Batch 执行缺口
+  ③ 纠正3（dataset 不再是空壳）：KindDataset 已被 validator 要求 dataset_id
+     (validator.go:131) 但无表/无查询/无执行器。决策：建 dataset 表(rows JSON)+CRUD+
+     DatasetExecutor（按 dataset_id 加载行集，输出 rows[]），补齐 M8 甩到 M10 的存储与执行器
+  ④ 纠正4（鉴权/限流不能破坏绿测试）：现仅 Recovery+日志中间件、config 无鉴权字段、
+     e2e_integration 与所有 CLI httptest 依赖裸放行。决策：做成可选——config.Auth.APIKeys
+     为空=放行（dev 与既有测试零改动）；配置后校验 X-API-Key；/healthz* 与 SSE 长连接
+     豁免限流；限流用 golang.org/x/time/rate 令牌桶
+  ⑤ 纠正5（撤销独立 export，事后反思 + Byteval 实证）：曾实现 swf export + /export 端点，
+     让系统去翻节点/猜主表/拍 CSV。查 Byteval：导出是「工作流内的节点」（结果合并胶水节点
+     + 写飞书表 application 节点，End 定义导出字段），无独立导出命令。且「输出什么」应由用户
+     经 End 节点决定，非系统代劳。决策：撤销 export（删命令/端点/service），导出回归为用户可搭的
+     图内节点；系统只保证「读完整 run 结果」（GET /runs/:id 已具备）。start/end 各仅一个节点
+落地说明：
+  存储：migration 00003 建 dataset 表(dataset_id/project_id/name/rows JSON/schema)；
+    rows 整存 JSON 列（不建子表，适配千级 case 评测集）；
+    sqlc 生成 CRUD + Search（复用 likePattern 转义）；DatasetService
+  执行器：nodes.Config 扩 AppResolver/DatasetResolver 接口注入；
+    ApplicationExecutor(Type "application")：按 app_id 取应用→kind=http 复用 HTTPExecutor、
+    kind=python 复用 CodeExecutor、kind=rpc 暂返明确未支持错误；
+    DatasetExecutor(Type "dataset")：按 dataset_id 取行集输出 rows[]；
+    batchWrap：在 scheduler.execNode 内统一包装（取执行器后、Execute 前判 batch 开启），
+    对所有节点类型生效、node_run 记聚合结果；对齐 Byteval ASL data.inputs.batch
+    （batchEnable/batchSize/inputLists[]，迭代源为数组端口），逐 item 注入迭代变量循环调底层执行器
+  结果落地（无独立 export，对齐 Byteval）：用户在图内接「结果合并」code 胶水节点 +
+    「写表/上传」application 节点，End 定义输出字段；系统提供 GET /runs/:id 读完整结果，不代做导出
+  复用/批量（对齐 Byteval builder 实证）：
+    swf clone-ref --workflow-id（拉已发布 DSL→ToIR→本地会话，接已有 clone.go；
+      蓝图术语 clone-ref，IR.Meta.Source 记来源）；
+    swf plan-apply --sid --file plan.json（声明式建图：一份 JSON plan 批量落 session 草稿，
+      对齐 Byteval「plan apply 按 JSON plan 批量创建 session 草稿」——nodes[] 内联 bindings[]、
+      edges[] 可带 source_port/target_port，替代逐条 add-node/add-edge/bind）；
+    附 swf plan-schema 打印各 kind 的 plan.json 节点规格（对齐 Byteval plan schema，Agent 自检字段）
+  加固：middleware.go（APIKey 校验 + rate limit，可选）；config 加 Auth/RateLimit；
+    router 挂中间件（healthz/SSE 豁免）；优雅退出已具备（server/worker）
+  部署：cmd/{server,worker,swf} 与 sidecar 各写 Dockerfile；compose 补 server/worker/
+    sidecar 服务(依赖 mysql/redis healthcheck)；Makefile 加 build-swf/镜像构建；
+    README（架构图+30 分钟起步+样例一键脚本+故障排查）
+  样例：examples/ 放 dataset 种子 + 建图脚本(swf 命令序列，分类器用 application 节点 kind=python
+    →sidecar，真实演示 M8 能力发现+M10 执行器全链路；结果落地用图内「结果合并」code 节点 + End)
+    + 一键 run --stream + GET /runs/:id 看结果
+  测试：dataset CRUD、ApplicationExecutor(http/python 委托+rpc 未支持)、
+    batchWrap(逐项+聚合+空数组)、middleware(空配置放行/校验/豁免)、
+    clone-ref/plan-apply(声明式建图往返)；E2E integration 串 dataset→分类器(batch)→结果节点；-race + vet 全绿
+范围界定（诚实说明）：
+  - 结果导出：无独立 export 命令/端点（对齐 Byteval：导出是图内节点）；用户经 code/application
+    节点 + End 自定义输出，系统只提供 GET /runs/:id 读完整结果
+  - RPC 应用：ApplicationExecutor 对 kind=rpc 返回明确「未支持」错误（无 RPC 传输层），
+    样例分类器用 kind=python(sidecar) 或 http；rpc 执行器留待有真实 RPC 后端时补
+  - workflow 节点（子流程 KindWorkflow）：本阶段不实现嵌套子流程执行器，留到需要时
+  - 限流粒度：进程内全局令牌桶（非按 key/租户配额），多实例部署需外置限流，随规模再说
+  - plan-apply 定位：本阶段是「声明式建图」（JSON plan→session 草稿，对齐 Byteval），
+    属构建期能力；不含「批量起 N 个 run」——单图内批量评测由节点级 batch 覆盖
+  - 批量评测形态：本轮用「单图 + dataset 节点 + 分类器 batch」覆盖；Byteval 的完整最佳实践
+    是「父工作流(batch 调度)+子工作流(batchSize=1 单条)」，嵌套子流执行器留到 KindWorkflow 落地时
 ```
 
 ---

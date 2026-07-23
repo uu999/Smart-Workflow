@@ -12,6 +12,7 @@ import (
 type appCtx struct {
 	out       io.Writer
 	serverURL string
+	apiKey    string // 可选 API Key（服务端开鉴权时用），塞 X-API-Key
 }
 
 // NewRootCmd 构造 swf 根命令并挂载全部子命令。
@@ -36,12 +37,20 @@ func NewRootCmd(out io.Writer) *cobra.Command {
 		defaultServer = "http://127.0.0.1:8080"
 	}
 	root.PersistentFlags().StringVar(&app.serverURL, "server", defaultServer, "swf-server base URL")
+	// 可选 API Key：默认取 SWF_API_KEY。服务端未开鉴权时留空即可。
+	root.PersistentFlags().StringVar(&app.apiKey, "api-key", os.Getenv("SWF_API_KEY"), "API Key（服务端开鉴权时用）")
 
 	root.AddCommand(
 		newInitCmd(app),
 		newSearchCmd(app),
+		newCloneRefCmd(app),
+		newPlanApplyCmd(app),
+		newPlanSchemaCmd(app),
 		newAppSchemaCmd(app),
 		newScopeCmd(app),
+		newDatasetCreateCmd(app),
+		newDatasetListCmd(app),
+		newDatasetGetCmd(app),
 		newAddNodeCmd(app),
 		newAddEdgeCmd(app),
 		newBindCmd(app),
@@ -57,8 +66,8 @@ func NewRootCmd(out io.Writer) *cobra.Command {
 	return root
 }
 
-// client 返回一个指向当前 --server 的客户端。
-func (a *appCtx) client() *Client { return NewClient(a.serverURL) }
+// client 返回一个指向当前 --server 的客户端（携带可选 API Key）。
+func (a *appCtx) client() *Client { return NewClient(a.serverURL).WithAPIKey(a.apiKey) }
 
 // emitOK / emitErr 把结果写到 app 的输出流，并返回给 cobra 的 error
 // （命令 RunE 返回 nil 让退出码为 0；结构化错误已进 envelope，故也返回 nil，
