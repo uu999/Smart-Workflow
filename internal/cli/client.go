@@ -13,6 +13,7 @@ import (
 // 走它，把 sidecar/DB 访问留在服务端，CLI 自身保持无状态、可离线做 IR 编辑。
 type Client struct {
 	BaseURL string
+	apiKey  string // 可选：非空时每个请求带 X-API-Key
 	http    *http.Client
 }
 
@@ -21,6 +22,19 @@ func NewClient(baseURL string) *Client {
 	return &Client{
 		BaseURL: baseURL,
 		http:    &http.Client{Timeout: 60 * time.Second},
+	}
+}
+
+// WithAPIKey 注入 API Key（链式）。空串时不带认证头（服务端未开鉴权时的常态）。
+func (c *Client) WithAPIKey(key string) *Client {
+	c.apiKey = key
+	return c
+}
+
+// setAuth 若配置了 API Key，则给请求加 X-API-Key 头。
+func (c *Client) setAuth(req *http.Request) {
+	if c.apiKey != "" {
+		req.Header.Set("X-API-Key", c.apiKey)
 	}
 }
 
@@ -55,6 +69,7 @@ func (c *Client) doJSON(method, path string, body any, out any) error {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	c.setAuth(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {

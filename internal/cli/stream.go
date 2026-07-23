@@ -60,6 +60,9 @@ func (a *appCtx) consumeSSE(ctx context.Context, runID string) (bool, error) {
 		return false, newErr("BAD_REQUEST", err.Error(), "")
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	if a.apiKey != "" {
+		req.Header.Set("X-API-Key", a.apiKey)
+	}
 
 	resp, err := cli.Do(req)
 	if err != nil {

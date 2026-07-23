@@ -10,6 +10,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.21.0
 	go.uber.org/zap v1.28.0
+	golang.org/x/time v0.8.0
 )
 
 require (
@@ -57,6 +58,5 @@ require (
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
-	golang.org/x/time v0.8.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 )
