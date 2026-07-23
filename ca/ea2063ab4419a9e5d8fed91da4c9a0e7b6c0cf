@@ -1,0 +1,33 @@
+internal/api/middleware.go
+  s_d2adda66c61afb::t_0d7d19bf81011a 1-94
+internal/config/config.go
+  s_d2adda66c61afb::t_97f27a3225ff9c 20,27-34
+  s_d2adda66c61afb::t_f02a6ea2e6d808 35-36
+internal/cli/stream.go
+  s_d2adda66c61afb::t_79e9947991ab55 63-65
+internal/cli/client.go
+  s_d2adda66c61afb::t_d75abc37664da5 16,28-37,39
+  s_d2adda66c61afb::t_7589358294380f 72
+  s_d2adda66c61afb::t_21dbbf42cd0a8c 38
+  s_d2adda66c61afb::t_4d5f98403c9190 40
+internal/api/middleware_test.go
+  s_d2adda66c61afb::t_0eb1c62223c0db 1-107
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "caea2063ab4419a9e5d8fed91da4c9a0e7b6c0cf",
+  "prompts": {},
+  "sessions": {
+    "s_d2adda66c61afb": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a5e2da6d643d95335f42969",
+        "model": "openrouter-3o__max"
+      },
+      "human_author": "renming.010207 <renming.010207@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
