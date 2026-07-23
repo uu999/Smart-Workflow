@@ -1,0 +1,38 @@
+deployments/Dockerfile.sidecar
+  s_d2adda66c61afb::t_91a79187a7e00d 1-35
+deployments/Dockerfile.server
+  s_d2adda66c61afb::t_5d43a3e15ec4f3 1-37
+deployments/Dockerfile.worker
+  s_d2adda66c61afb::t_8b4c12acc736d6 1-29
+deployments/Dockerfile.migrate
+  s_d2adda66c61afb::t_e2edc8a986d05e 1-32
+Makefile
+  s_d2adda66c61afb::t_c8f91f61c91af5 5-9,14,18,20,22-23,25-30,35-36
+  s_d2adda66c61afb::t_922d8d45655fae 75-88
+  s_d2adda66c61afb::t_c730480849aeca 37
+.dockerignore
+  s_d2adda66c61afb::t_0979370f055198 1-32
+deployments/docker-compose.yaml
+  s_d2adda66c61afb::t_f6bfc90ea68a20 1-14,26,43,52-139
+  s_d2adda66c61afb::t_321d61da2c8ac6 140
+deployments/Dockerfile.swf
+  s_d2adda66c61afb::t_03ecf7783f1fb3 1-29
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "178bf0b72a72299eab9bac1afe54ee24305faf74",
+  "prompts": {},
+  "sessions": {
+    "s_d2adda66c61afb": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a5e2da6d643d95335f42969",
+        "model": "openrouter-3o__max"
+      },
+      "human_author": "renming.010207 <renming.010207@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
