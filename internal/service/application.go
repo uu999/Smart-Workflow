@@ -187,10 +187,14 @@ func (s *ApplicationService) Delete(ctx context.Context, appID string) error {
 	return nil
 }
 
-// normalizeJSON 校验 raw 为合法 JSON；空输入归一为 NULL（存 nil）。
+// normalizeJSON 校验并归一化可选 JSON 字段（input_schema/output_schema/config/col_schema）。
+// 关键：空输入归一为 JSON 字面量 "null"（而非 Go nil）。原因——这些列是 `JSON NULL`，
+// 若存 SQL NULL，读回时 sqlc 生成的 json.RawMessage Scan 目标无法接收 NULL 会报
+// "unsupported Scan, storing driver.Value type <nil>"。存合法字面量 null 则列非 SQL NULL，
+// 往返安全，且语义等价（JSON null == 无值）。非法 JSON 报 ErrInvalidJSON。
 func normalizeJSON(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 || string(raw) == "null" {
-		return nil, nil
+		return json.RawMessage("null"), nil
 	}
 	if !json.Valid(raw) {
 		return nil, ErrInvalidJSON

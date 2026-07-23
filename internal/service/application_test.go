@@ -29,10 +29,10 @@ func TestLikePattern(t *testing.T) {
 
 func TestNormalizeJSON(t *testing.T) {
 	cases := []struct {
-		name    string
-		in      json.RawMessage
-		wantErr bool
-		wantNil bool
+		name     string
+		in       json.RawMessage
+		wantErr  bool
+		wantNull bool // 期望输出为 JSON 字面量 "null"（存 nullable 列避免 SQL NULL）
 	}{
 		{"empty", nil, false, true},
 		{"literal null", json.RawMessage("null"), false, true},
@@ -51,10 +51,12 @@ func TestNormalizeJSON(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if !tc.wantErr {
-				if tc.wantNil && out != nil {
-					t.Fatalf("expected nil, got %s", out)
+				// 空/null 输入应归一为字面量 "null"（非 Go nil），使 nullable JSON 列
+				// 存合法 JSON 而非 SQL NULL，避免读回时 json.RawMessage Scan 崩溃。
+				if tc.wantNull && string(out) != "null" {
+					t.Fatalf("expected literal null, got %q", out)
 				}
-				if !tc.wantNil && out == nil {
+				if !tc.wantNull && out == nil {
 					t.Fatal("expected non-nil output")
 				}
 			}
