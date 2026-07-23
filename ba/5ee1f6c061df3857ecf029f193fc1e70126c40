@@ -1,0 +1,73 @@
+examples/sentiment/02_run.sh
+  s_d2adda66c61afb::t_1717ca31487f9a 1-55
+internal/api/router.go
+  s_d2adda66c61afb::t_b2790225ecc59c 93
+  s_d2adda66c61afb::t_f8e4bcfd74a643 125-131
+  s_d2adda66c61afb::t_c33e8cbf49bc37 54
+  s_d2adda66c61afb::t_1f931e601f34aa 74-76
+  s_d2adda66c61afb::t_ac316a0f896036 132-133
+plan.md
+  s_d2adda66c61afb::t_9d88b928da0763 370-376,386
+  s_d2adda66c61afb::t_cf4d2b7381ac29 458-461
+  s_d2adda66c61afb::t_768f34243ed214 446-447,449-450,452-453
+  s_d2adda66c61afb::t_cbad1f40cf2348 428-430
+  s_d2adda66c61afb::t_ef2a454602ecdf 415-419,431-432
+  s_d2adda66c61afb::t_fefdde0ee14c6a 433-439
+  s_d2adda66c61afb::t_e7570b073e36ac 377-382,387,391-393
+  s_d2adda66c61afb::t_19057228a4ad5f 364-366,368,395-414,420-421,423-427,440-444,448,451,454-457
+  s_d2adda66c61afb::t_47d9ac8ad0e52d 422,445
+  s_d2adda66c61afb::t_fc07893898f0e5 369,383-385,394
+  s_d2adda66c61afb::t_a6ff4cb865f2bb 388-390
+  s_d2adda66c61afb::t_2ed46f08550455 363
+examples/sentiment/01_seed.sh
+  s_d2adda66c61afb::t_9b20650779f043 1-59
+internal/cli/dataset_cmds_test.go
+  s_d2adda66c61afb::t_d2d9bc870124ba 1-151
+internal/cli/catalog_cmds.go
+  s_d2adda66c61afb::t_eadc8aa09343e7 35-36
+internal/api/datasets.go
+  s_d2adda66c61afb::t_20026024d21600 1-103
+README.md
+  s_d2adda66c61afb::t_ff2992a1cbdfad 1-120
+examples/sentiment/plan.json
+  s_d2adda66c61afb::t_83c25b69dba4d9 1-83
+examples/sentiment/README.md
+  s_d2adda66c61afb::t_9deadf436ba6be 1-55
+examples/sentiment/.gitignore
+  s_d2adda66c61afb::t_c5763656093593 1-2
+internal/cli/root.go
+  s_d2adda66c61afb::t_9ddbc4dc30e131 15
+  s_d2adda66c61afb::t_c5f4aaeec8f63c 47-48
+  s_d2adda66c61afb::t_67e564e04ffb4d 51-53
+  s_d2adda66c61afb::t_b39ec8d5e9da80 40-41
+  s_d2adda66c61afb::t_703d7e21dee1e2 69-70
+  s_d2adda66c61afb::t_1d036fa2a8f7d2 46
+internal/cli/dataset_cmds.go
+  s_d2adda66c61afb::t_91fb026517424d 1-134
+examples/sentiment/dataset.json
+  s_d2adda66c61afb::t_0b6ae8e7c5bec3 1-8
+internal/api/datasets_integration_test.go
+  s_d2adda66c61afb::t_b31789692e5087 1-154
+internal/api/helpers.go
+  s_d2adda66c61afb::t_e3ee024b9aec60 33-34
+examples/sentiment/classifier.py
+  s_d2adda66c61afb::t_2b7f325fa07887 1-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "ba5ee1f6c061df3857ecf029f193fc1e70126c40",
+  "prompts": {},
+  "sessions": {
+    "s_d2adda66c61afb": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a5e2da6d643d95335f42969",
+        "model": "openrouter-3o__max"
+      },
+      "human_author": "renming.010207 <renming.010207@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
