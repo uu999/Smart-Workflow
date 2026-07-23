@@ -11,17 +11,20 @@ import (
 
 type Querier interface {
 	CreateApplication(ctx context.Context, arg CreateApplicationParams) (sql.Result, error)
+	CreateDataset(ctx context.Context, arg CreateDatasetParams) (sql.Result, error)
 	CreateNodeRun(ctx context.Context, arg CreateNodeRunParams) (sql.Result, error)
 	CreateProject(ctx context.Context, arg CreateProjectParams) (sql.Result, error)
 	CreateWorkflow(ctx context.Context, arg CreateWorkflowParams) (sql.Result, error)
 	CreateWorkflowRun(ctx context.Context, arg CreateWorkflowRunParams) (sql.Result, error)
 	CreateWorkflowVersion(ctx context.Context, arg CreateWorkflowVersionParams) (sql.Result, error)
 	GetApplication(ctx context.Context, appID string) (GetApplicationRow, error)
+	GetDataset(ctx context.Context, datasetID string) (GetDatasetRow, error)
 	GetProjectByProjectID(ctx context.Context, projectID string) (GetProjectByProjectIDRow, error)
 	GetWorkflow(ctx context.Context, workflowID string) (GetWorkflowRow, error)
 	GetWorkflowRun(ctx context.Context, runID string) (WorkflowRun, error)
 	GetWorkflowVersion(ctx context.Context, arg GetWorkflowVersionParams) (WorkflowVersion, error)
 	ListApplications(ctx context.Context, arg ListApplicationsParams) ([]ListApplicationsRow, error)
+	ListDatasets(ctx context.Context, arg ListDatasetsParams) ([]ListDatasetsRow, error)
 	ListNodeRuns(ctx context.Context, runID string) ([]NodeRun, error)
 	ListProjects(ctx context.Context, arg ListProjectsParams) ([]ListProjectsRow, error)
 	ListRunsByWorkflow(ctx context.Context, arg ListRunsByWorkflowParams) ([]ListRunsByWorkflowRow, error)
@@ -31,12 +34,16 @@ type Querier interface {
 	PublishWorkflow(ctx context.Context, arg PublishWorkflowParams) (sql.Result, error)
 	// 按项目 + 名称模糊搜索（name LIKE，调用方传 %term% 或 % 匹配全部）。
 	SearchApplications(ctx context.Context, arg SearchApplicationsParams) ([]SearchApplicationsRow, error)
+	// 按项目 + 名称模糊搜索（name LIKE，调用方传 %term% 或 % 匹配全部）。
+	SearchDatasets(ctx context.Context, arg SearchDatasetsParams) ([]SearchDatasetsRow, error)
 	// 按项目 + 名称模糊搜索（复用优先：Agent 先搜可复用工作流）。
 	SearchWorkflows(ctx context.Context, arg SearchWorkflowsParams) ([]SearchWorkflowsRow, error)
 	SoftDeleteApplication(ctx context.Context, appID string) (sql.Result, error)
+	SoftDeleteDataset(ctx context.Context, datasetID string) (sql.Result, error)
 	SoftDeleteProject(ctx context.Context, projectID string) (sql.Result, error)
 	SoftDeleteWorkflow(ctx context.Context, workflowID string) (sql.Result, error)
 	UpdateApplication(ctx context.Context, arg UpdateApplicationParams) (sql.Result, error)
+	UpdateDataset(ctx context.Context, arg UpdateDatasetParams) (sql.Result, error)
 	UpdateProject(ctx context.Context, arg UpdateProjectParams) (sql.Result, error)
 	UpdateRunStatus(ctx context.Context, arg UpdateRunStatusParams) (sql.Result, error)
 	UpdateWorkflowDraft(ctx context.Context, arg UpdateWorkflowDraftParams) (sql.Result, error)

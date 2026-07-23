@@ -25,6 +25,20 @@ type Application struct {
 	DeletedAt    sql.NullTime    `json:"deleted_at"`
 }
 
+type Dataset struct {
+	ID        uint64          `json:"id"`
+	DatasetID string          `json:"dataset_id"`
+	ProjectID string          `json:"project_id"`
+	Name      string          `json:"name"`
+	ColSchema json.RawMessage `json:"col_schema"`
+	RowData   json.RawMessage `json:"row_data"`
+	RowCount  int32           `json:"row_count"`
+	Status    int8            `json:"status"`
+	CreatedAt time.Time       `json:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at"`
+	DeletedAt sql.NullTime    `json:"deleted_at"`
+}
+
 type NodeRun struct {
 	ID         uint64          `json:"id"`
 	RunID      string          `json:"run_id"`

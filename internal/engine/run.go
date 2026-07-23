@@ -54,10 +54,19 @@ type DSLCache interface {
 
 // New 用给定 sidecar 地址构造引擎。sidecarURL 通常来自 config.Sidecar.BaseURL，
 // 打通了「配置 → code 节点实际调用地址」这条链路。
+//
+// M10：store 非空时注入 store-backed resolver，注册表据此启用 application/dataset
+// 执行器；store 为 nil（部分单测）时不注入，行为与之前一致（仅内置无状态执行器）。
 func New(store *mysql.Store, sidecarURL string) *Engine {
+	cfg := nodes.Config{SidecarURL: sidecarURL}
+	if store != nil {
+		res := &storeResolver{store: store}
+		cfg.AppResolver = res
+		cfg.DatasetResolver = res
+	}
 	return &Engine{
 		store:       store,
-		registry:    nodes.NewDefaultRegistry(nodes.Config{SidecarURL: sidecarURL}),
+		registry:    nodes.NewDefaultRegistry(cfg),
 		logger:      zap.NewNop(),
 		Concurrency: 8,
 	}

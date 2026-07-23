@@ -303,7 +303,8 @@ func (c *coord) execNode(ctx context.Context, id string, done chan<- event) {
 	}
 
 	ec := &nodes.ExecContext{Node: node, Inputs: inputs, Pool: c.pool, RunID: c.runID}
-	result, cost, attempt, execErr := runWithRetry(ctx, exec, ec, node.Data.RetryConfig)
+	// runNode 统一包装：普通节点直接跑，开启 batch 的节点对数组逐项跑并聚合（纠正2）。
+	result, cost, attempt, execErr := c.runNode(ctx, exec, ec, node.Data.RetryConfig)
 	finishedAt := time.Now()
 	if execErr != nil {
 		c.pool.SetError(id, "NODE_ERROR", execErr.Error())
