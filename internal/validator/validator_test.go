@@ -169,3 +169,53 @@ func TestValidate_UnreachableWarning(t *testing.T) {
 		t.Errorf("expected unreachable_node warning, got %+v", r.Issues)
 	}
 }
+
+// batchIR：dataset(rows:array) → 分类器(batch 逐条，item 声明 object) → merge(引 items) → end。
+// 覆盖 batch 语义：①迭代输入 array→object 不报 type_mismatch；②聚合输出 items 未声明也合法。
+func batchIR() *dsl.IR {
+	return &dsl.IR{
+		Nodes: []dsl.Node{
+			{ID: "start_0", Kind: dsl.KindStart, Outputs: []dsl.Port{{Name: "q", Type: dsl.ValueTypeString}}},
+			{ID: "ds_0", Kind: dsl.KindDataset, DatasetID: "d1",
+				Outputs: []dsl.Port{{Name: "rows", Type: dsl.ValueTypeArray}}},
+			{
+				ID: "clf_0", Kind: dsl.KindApplication, AppID: "1",
+				Inputs:   []dsl.Port{{Name: "item", Type: dsl.ValueTypeObject, Required: true}},
+				Batch:    &dsl.Batch{Enable: true, SourceNode: "ds_0", SourcePort: "rows", ItemName: "item"},
+				Bindings: []dsl.Binding{{Port: "item", Mode: dsl.BindModeRef, SourceNode: "ds_0", SourcePort: "rows"}},
+			},
+			{
+				ID: "merge_0", Kind: dsl.KindCode,
+				Inputs:   []dsl.Port{{Name: "items", Type: dsl.ValueTypeArray}},
+				Params:   map[string]any{"code": "sink({})"},
+				Bindings: []dsl.Binding{{Port: "items", Mode: dsl.BindModeRef, SourceNode: "clf_0", SourcePort: "items"}},
+			},
+			{ID: "end_0", Kind: dsl.KindEnd},
+		},
+		Edges: []dsl.Edge{
+			{Source: "start_0", Target: "ds_0"},
+			{Source: "ds_0", Target: "clf_0"},
+			{Source: "clf_0", Target: "merge_0"},
+			{Source: "merge_0", Target: "end_0"},
+		},
+	}
+}
+
+// TestValidate_BatchSemantics 验证 batch 感知：迭代输入 array→object 与聚合输出 items 均不报错。
+func TestValidate_BatchSemantics(t *testing.T) {
+	r := Validate(batchIR())
+	if r.HasError() {
+		t.Errorf("batch-aware IR should pass, got %+v", r.Issues)
+	}
+}
+
+// TestValidate_BatchAggregateTypeMismatch 验证 batch 聚合输出接非 array 目标仍报 type_mismatch。
+func TestValidate_BatchAggregateTypeMismatch(t *testing.T) {
+	ir := batchIR()
+	// merge 的 items 端口错误声明为 string（batch 聚合恒为 array）。
+	ir.Nodes[3].Inputs[0].Type = dsl.ValueTypeString
+	r := Validate(ir)
+	if !hasCode(r, "type_mismatch") {
+		t.Errorf("expected type_mismatch for non-array target of batch aggregate, got %+v", r.Issues)
+	}
+}

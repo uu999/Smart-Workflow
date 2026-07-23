@@ -205,10 +205,25 @@ func checkOneBinding(n *dsl.Node, b dsl.Binding, nodes map[string]*dsl.Node, r *
 			fmt.Sprintf("ref source node %q not found", b.SourceNode))
 		return
 	}
+	// batch 语义①：源节点开了 batch 时，其运行期输出是聚合产物 {items, count}
+	// （见 scheduler.runNode），这两个端口即使未静态声明也合法；类型按数组处理。
+	if srcBatchOutput(src, b.SourcePort) {
+		if in := findInput(n, b.Port); in != nil && in.Type != "" && !typeCompatible(in.Type, "array") {
+			r.add(SeverityError, "type_mismatch", n.ID, b.Port,
+				fmt.Sprintf("type mismatch: %s.%s is array (batch aggregate), target %s expects %s",
+					b.SourceNode, b.SourcePort, b.Port, in.Type))
+		}
+		return
+	}
 	out := src.FindOutput(b.SourcePort)
 	if out == nil {
 		r.add(SeverityError, "source_port_not_found", n.ID, b.Port,
 			fmt.Sprintf("ref source port %q not found on node %q", b.SourcePort, b.SourceNode))
+		return
+	}
+	// batch 语义②：目标节点开了 batch 且本绑定是迭代源端口时，源为 array 会被逐项
+	// 拆成元素注入（见 scheduler.runNode），故 array→元素类型 不算 type_mismatch。
+	if isBatchIterateInput(n, b.Port) && out.Type == "array" {
 		return
 	}
 	// 类型兼容：目标 input 声明了类型时比对。
@@ -217,6 +232,33 @@ func checkOneBinding(n *dsl.Node, b dsl.Binding, nodes map[string]*dsl.Node, r *
 			fmt.Sprintf("type mismatch: %s.%s is %s, target %s expects %s",
 				b.SourceNode, b.SourcePort, out.Type, b.Port, in.Type))
 	}
+}
+
+// srcBatchOutput 判断：源节点开了 batch，且引用端口是 batch 聚合产物（items/count）。
+// 这两个端口由 scheduler.runNode 在运行期产生，不要求静态声明。
+func srcBatchOutput(src *dsl.Node, port string) bool {
+	if src.Batch == nil || !src.Batch.Enable {
+		return false
+	}
+	return port == "items" || port == "count"
+}
+
+// isBatchIterateInput 判断：目标节点开了 batch，且 port 是其迭代源端口
+// （item_name 缺省取 source_port）。此端口运行期被逐项替换为单个元素。
+func isBatchIterateInput(n *dsl.Node, port string) bool {
+	if n.Batch == nil || !n.Batch.Enable {
+		return false
+	}
+	item := n.Batch.ItemName
+	if item == "" {
+		item = n.Batch.SourcePort
+	}
+	return port == item
+}
+
+// typeCompatible 宽松类型比对（batch 聚合恒为 array；目标声明 array/any 视为兼容）。
+func typeCompatible(target, actual string) bool {
+	return target == actual || target == "any" || target == ""
 }
 
 // checkReachability 校验除 start 外节点可达、除 end 外能到达 end。
