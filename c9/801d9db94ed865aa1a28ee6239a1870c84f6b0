@@ -1,0 +1,23 @@
+internal/service/application.go
+  s_d2adda66c61afb::t_7bad4a554db4d0 190-194,197
+internal/service/application_test.go
+  s_d2adda66c61afb::t_a9f029f83c5358 32-35,54-57,59
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "c9801d9db94ed865aa1a28ee6239a1870c84f6b0",
+  "prompts": {},
+  "sessions": {
+    "s_d2adda66c61afb": {
+      "agent_id": {
+        "tool": "trae",
+        "id": "6a5e2da6d643d95335f42969",
+        "model": "openrouter-3o__max"
+      },
+      "human_author": "renming.010207 <renming.010207@bytedance.com>"
+    }
+  },
+  "attestation_metadata": {},
+  "remote_transcripts": {}
+}
